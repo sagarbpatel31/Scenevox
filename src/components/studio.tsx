@@ -9,6 +9,10 @@ import {
 } from "@/lib/studio-data";
 import { browserPreviewProvider } from "@/lib/tts/browser-preview";
 import type { TtsPlayback } from "@/lib/tts/contracts";
+import {
+  DirectorSession,
+  type DirectorState,
+} from "@/lib/voice-agent/director-session";
 
 type PlaybackState = "idle" | "playing";
 type EngineState = "checking" | "browser-preview" | "assemblyai-ready";
@@ -31,13 +35,14 @@ const judgeTourSteps = [
   },
 ] as const;
 
-function Icon({ name }: { name: "play" | "stop" | "spark" | "plus" | "chevron" }) {
+function Icon({ name }: { name: "play" | "stop" | "spark" | "plus" | "chevron" | "mic" }) {
   const paths = {
     play: <path d="m9 7 8 5-8 5V7Z" />,
     stop: <rect x="8" y="8" width="8" height="8" rx="1" />,
     spark: <path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" />,
     plus: <path d="M12 5v14M5 12h14" />,
     chevron: <path d="m9 18 6-6-6-6" />,
+    mic: <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0M12 19v3M8 22h8" />,
   };
 
   return (
@@ -65,8 +70,15 @@ export function Studio() {
   const [statusText, setStatusText] = useState("Ready for direction");
   const [engineState, setEngineState] = useState<EngineState>("checking");
   const [tourStep, setTourStep] = useState<number | null>(null);
+  const [directorState, setDirectorState] = useState<DirectorState>("idle");
+  const [directorLineId, setDirectorLineId] = useState<string | null>(null);
+  const [directorUserTranscript, setDirectorUserTranscript] = useState("");
+  const [directorAgentTranscript, setDirectorAgentTranscript] = useState("");
+  const [directorError, setDirectorError] = useState("");
+  const [directorSessionId, setDirectorSessionId] = useState("");
   const stopRequested = useRef(false);
   const activePlayback = useRef<TtsPlayback | null>(null);
+  const directorSession = useRef<DirectorSession | null>(null);
 
   useEffect(() => {
     const readVoices = () => setAvailableVoices(window.speechSynthesis?.getVoices() ?? []);
@@ -74,6 +86,13 @@ export function Studio() {
     window.speechSynthesis?.addEventListener("voiceschanged", readVoices);
     return () => window.speechSynthesis?.removeEventListener("voiceschanged", readVoices);
   }, []);
+
+  useEffect(
+    () => () => {
+      directorSession.current?.dispose();
+    },
+    [],
+  );
 
   useEffect(() => {
     let active = true;
@@ -209,11 +228,79 @@ export function Studio() {
     void playLines(judgeCut);
   };
 
+  const startDirector = async () => {
+    stopPlayback();
+    setTourStep(null);
+    directorSession.current?.dispose();
+    setDirectorUserTranscript("");
+    setDirectorAgentTranscript("");
+    setDirectorError("");
+    setDirectorSessionId("");
+    setDirectorLineId(selectedLine.id);
+
+    const lineId = selectedLine.id;
+    const lineNumber = selectedIndex + 1;
+    const character = getCharacter(selectedLine.characterId);
+    const session = new DirectorSession({
+      onState: setDirectorState,
+      onTranscript: (speaker, text) => {
+        if (speaker === "user") setDirectorUserTranscript(text);
+        else setDirectorAgentTranscript(text);
+      },
+      onRevision: (revision) => {
+        setLines((current) =>
+          current.map((line) =>
+            line.id === lineId
+              ? { ...line, text: revision.text, direction: revision.direction }
+              : line,
+          ),
+        );
+        setSelectedLineId(lineId);
+        setStatusText(`Director updated line ${String(lineNumber).padStart(2, "0")}`);
+      },
+      onSession: setDirectorSessionId,
+      onError: setDirectorError,
+    });
+    directorSession.current = session;
+
+    await session.connect({
+      lineId,
+      lineNumber,
+      characterName: character.name,
+      text: selectedLine.text,
+      direction: selectedLine.direction,
+    });
+  };
+
+  const endDirector = () => {
+    directorSession.current?.end();
+    setStatusText("Director session ended");
+  };
+
   const engineLabel = {
     checking: "Checking voice engine",
     "browser-preview": "Browser preview · API key not configured",
-    "assemblyai-ready": "AssemblyAI key detected · protocol pending",
+    "assemblyai-ready": "AssemblyAI Voice Agent ready",
   }[engineState];
+
+  const directorStatus = {
+    idle: "Ready",
+    connecting: "Connecting",
+    listening: "Listening",
+    thinking: "Thinking",
+    speaking: "Speaking",
+    ending: "Ending",
+    error: "Needs attention",
+  }[directorState];
+
+  const directorActive = !["idle", "error"].includes(directorState);
+  const directedLine = directorLineId
+    ? lines.find((line) => line.id === directorLineId)
+    : selectedLine;
+  const directedCharacter = getCharacter(directedLine?.characterId ?? selectedLine.characterId);
+  const directedLineNumber = directedLine
+    ? lines.findIndex((line) => line.id === directedLine.id) + 1
+    : selectedIndex + 1;
 
   const activeTour = tourStep === null ? null : judgeTourSteps[tourStep];
 
@@ -395,6 +482,57 @@ export function Studio() {
               <option key={character.id} value={character.id}>{character.name}</option>
             ))}
           </select>
+
+          <section className={`director-card ${directorActive ? "active" : ""}`} aria-live="polite">
+            <div className="director-card-header">
+              <div>
+                <span className="director-kicker">AssemblyAI Director</span>
+                <strong>{directorStatus}</strong>
+              </div>
+              <span className={`director-orb ${directorState}`} aria-hidden="true">
+                <Icon name="mic" />
+              </span>
+            </div>
+
+            {directorActive || directorUserTranscript || directorAgentTranscript || directorError ? (
+              <div className="director-conversation">
+                <span className="director-context">
+                  Line {String(directedLineNumber).padStart(2, "0")} · {directedCharacter.name}
+                </span>
+                {directorUserTranscript ? (
+                  <p><strong>You</strong>{directorUserTranscript}</p>
+                ) : null}
+                {directorAgentTranscript ? (
+                  <p className="agent"><strong>Director</strong>{directorAgentTranscript}</p>
+                ) : null}
+                {directorError ? <p className="director-error">{directorError}</p> : null}
+              </div>
+            ) : (
+              <p className="director-intro">
+                Select a line, then describe the emotional change out loud. The director can rewrite it in place.
+              </p>
+            )}
+
+            <div className="director-actions">
+              <span>
+                {directorSessionId ? `Live · ${directorSessionId.slice(-6)}` : "Winter voice · 5 min cap"}
+              </span>
+              {directorActive ? (
+                <button type="button" className="director-button end" onClick={endDirector}>
+                  <Icon name="stop" /> End
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="director-button"
+                  onClick={startDirector}
+                  disabled={engineState !== "assemblyai-ready" || directorState === "connecting"}
+                >
+                  <Icon name="mic" /> Talk to Director
+                </button>
+              )}
+            </div>
+          </section>
         </aside>
 
         <div className="performance-bar">

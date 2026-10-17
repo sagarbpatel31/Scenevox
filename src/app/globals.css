@@ -167,6 +167,32 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .direction-chips button:hover, .direction-chips button.active { background: var(--ink); color: white; border-color: var(--ink); }
 .wide-select { width: calc(100% - 40px); margin: 0 20px; padding: 10px; font-size: 12px; }
 
+.director-card { margin: 20px; padding: 16px; border: 1px solid rgba(108, 99, 217, 0.2); border-radius: 15px; background: linear-gradient(145deg, #f1efff, #ebe9de); }
+.director-card.active { border-color: rgba(108, 99, 217, 0.55); box-shadow: 0 12px 30px rgba(108, 99, 217, 0.1); }
+.director-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.director-card-header > div { display: flex; flex-direction: column; gap: 3px; }
+.director-kicker { color: var(--violet); font-size: 8px; font-weight: 900; letter-spacing: 0.13em; text-transform: uppercase; }
+.director-card-header strong { font-size: 14px; letter-spacing: -0.025em; }
+.director-orb { width: 35px; height: 35px; display: grid; place-items: center; border-radius: 50%; background: white; color: var(--violet); border: 1px solid rgba(108, 99, 217, 0.2); }
+.director-orb svg { width: 17px; height: 17px; }
+.director-orb.listening, .director-orb.speaking { background: var(--violet); color: white; animation: director-pulse 1.25s ease-in-out infinite; }
+.director-orb.thinking { animation: director-spin 1.4s linear infinite; }
+.director-orb.error { color: #b4422f; border-color: rgba(180, 66, 47, 0.3); }
+.director-intro { margin: 13px 0 15px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.director-conversation { margin-top: 13px; display: flex; flex-direction: column; gap: 7px; }
+.director-context { color: var(--muted); font-size: 9px; font-weight: 750; }
+.director-conversation p { margin: 0; padding: 9px 10px; border-radius: 10px; background: white; color: var(--ink); font-size: 10px; line-height: 1.45; }
+.director-conversation p.agent { background: var(--ink); color: #d4d3cb; }
+.director-conversation p strong { display: block; margin-bottom: 3px; color: var(--violet); font-size: 8px; letter-spacing: 0.09em; text-transform: uppercase; }
+.director-conversation p.agent strong { color: var(--lime); }
+.director-conversation p.director-error { color: #8f3022; background: #ffe4dc; }
+.director-actions { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.director-actions > span { color: var(--muted); font-size: 8px; }
+.director-button { border: 0; border-radius: 999px; padding: 9px 11px; display: inline-flex; align-items: center; gap: 6px; background: var(--violet); color: white; font-size: 9px; font-weight: 850; cursor: pointer; }
+.director-button.end { background: var(--coral); color: var(--ink); }
+.director-button:disabled { cursor: not-allowed; opacity: 0.45; }
+.director-button svg { width: 14px; height: 14px; }
+
 .performance-bar { grid-column: 1 / -1; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; background: var(--ink); color: white; display: grid; grid-template-columns: 220px 1fr auto auto; align-items: center; gap: 24px; padding: 17px 19px; overflow: hidden; }
 .now-playing { display: flex; align-items: center; gap: 12px; }
 .live-orb { width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #313229; color: var(--lime); }
@@ -215,6 +241,8 @@ footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: fle
 
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(182, 239, 91, 0.12); } }
 @keyframes dance { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
+@keyframes director-pulse { 50% { box-shadow: 0 0 0 7px rgba(108, 99, 217, 0.13); } }
+@keyframes director-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1050px) {
   .hero-strip { grid-template-columns: 1fr auto; }
@@ -227,6 +255,7 @@ footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: fle
   .direction-panel .field-label:nth-of-type(1), .direction-panel textarea { grid-column: 1; }
   .direction-panel .field-label:nth-of-type(2), .direction-chips { grid-column: 2; }
   .wide-select, .direction-panel .field-label:last-of-type { grid-column: 2; }
+  .director-card { grid-column: 1 / -1; }
 }
 
 @media (max-width: 760px) {

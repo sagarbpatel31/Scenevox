@@ -9,6 +9,7 @@
 /build
 
 # local environment files and secrets
+.env
 .env*.local
 
 # logs

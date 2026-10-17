@@ -2,8 +2,9 @@ export async function GET() {
   return Response.json({
     ok: true,
     product: "SceneVox",
-    ttsEndpoint: "wss://streaming-tts.assemblyai.com/v1/ws",
+    agentEndpoint: "wss://agents.assemblyai.com/v1/ws",
+    standaloneTtsEndpoint: "wss://streaming-tts.assemblyai.com/v1/ws",
     provider: process.env.ASSEMBLYAI_API_KEY ? "assemblyai-ready" : "browser-preview",
-    protocolStatus: "awaiting-official-event-schema",
+    protocolStatus: "voice-agent-api-ready",
   });
 }

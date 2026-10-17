@@ -28,3 +28,12 @@
 - Added a three-step, 60-second judge tour that ends with a directed full-scene performance.
 - Made the share control functional by copying the current scene URL.
 - Kept the AssemblyAI key server-only and did not invent an unpublished WebSocket message schema.
+
+## 2026-10-17 — live AssemblyAI director
+
+- Validated the participant's AssemblyAI API key by minting a short-lived token without displaying either secret.
+- Moved the local secret from an unignored `.env` file to the gitignored `.env.local` convention.
+- Added a same-origin server route that mints single-use Voice Agent tokens and caps sessions at five minutes.
+- Added cross-browser microphone resampling, echo cancellation, live transcripts, streamed PCM playback, barge-in cleanup, and explicit `session.end` teardown.
+- Added the `revise_selected_line` client tool so the spoken director can update the selected dialogue and performance direction in the studio.
+- Used inline session configuration because the dashboard Agent is still rate-limited and the Voice Agent API supports one-off dynamic agents without an `agent_id`.
