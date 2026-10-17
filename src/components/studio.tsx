@@ -1,308 +1,362 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  characters,
-  directionOptions,
-  initialLines,
-  type ScriptLine,
-} from "@/lib/studio-data";
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import { directionOptions, type ScriptLine } from "@/lib/studio-data";
+import {
+  createDemoScene,
+  decodeSharedScene,
+  encodeSharedScene,
+  makeTake,
+  SCENE_STORAGE_KEY,
+  screenplayText,
+  validateScene,
+  type SceneDocument,
+  type SceneTake,
+} from "@/lib/scene-document";
 import { browserPreviewProvider } from "@/lib/tts/browser-preview";
 import type { TtsPlayback } from "@/lib/tts/contracts";
-import {
-  DirectorSession,
-  type DirectorState,
-} from "@/lib/voice-agent/director-session";
+import type { DirectorRevision } from "@/lib/voice-agent/director-session";
+import { DirectorBooth } from "./director-booth";
+import { ImportDialog } from "./import-dialog";
+import { TakeComparison } from "./take-comparison";
 
-type PlaybackState = "idle" | "playing";
-type EngineState = "checking" | "browser-preview" | "assemblyai-ready";
+type History = {
+  scene: SceneDocument;
+  past: SceneDocument[];
+  future: SceneDocument[];
+};
+type HistoryAction =
+  | { type: "edit"; update: (scene: SceneDocument) => SceneDocument }
+  | { type: "load"; scene: SceneDocument }
+  | { type: "undo" | "redo" };
+function historyReducer(state: History, action: HistoryAction): History {
+  if (action.type === "load")
+    return { scene: action.scene, past: [], future: [] };
+  if (action.type === "undo") {
+    const previous = state.past.at(-1);
+    return previous
+      ? {
+          scene: previous,
+          past: state.past.slice(0, -1),
+          future: [state.scene, ...state.future],
+        }
+      : state;
+  }
+  if (action.type === "redo") {
+    const next = state.future[0];
+    return next
+      ? {
+          scene: next,
+          past: [...state.past, state.scene],
+          future: state.future.slice(1),
+        }
+      : state;
+  }
+  if (action.type === "edit")
+    return {
+      scene: action.update(state.scene),
+      past: [...state.past.slice(-39), state.scene],
+      future: [],
+    };
+  return state;
+}
 
-const judgeTourSteps = [
+function downloadFile(contents: string, filename: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([contents], { type: mime }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+const tourSteps = [
   {
-    title: "Start with a scene that is ready to perform",
-    body: "A judge can understand the premise, select a line, and hear the first performance in seconds.",
+    title: "A scene, ready for its first read.",
+    body: "Choose a line to edit. Import your own script to create a cast automatically, or explore this sample.",
     target: "script",
   },
   {
-    title: "Cast for contrast",
-    body: "Every character gets an independent voice, so writers can test whether a conversation feels distinct.",
-    target: "cast",
+    title: "Speak the change you want.",
+    body: "Open the Director’s booth. Try: “Shorten this line, with fear beneath the smile.” AssemblyAI listens, revises the line, and speaks its response.",
+    target: "direction",
   },
   {
-    title: "Direct the emotional turn",
-    body: "We will change Mara's pivotal line to “barely holding back,” then stream the full scene.",
+    title: "Keep the take that tells the story.",
+    body: "Open Takes to audition and restore versions. Your scene saves automatically; share a snapshot or export the script.",
     target: "direction",
   },
 ] as const;
 
-function Icon({ name }: { name: "play" | "stop" | "spark" | "plus" | "chevron" | "mic" }) {
-  const paths = {
-    play: <path d="m9 7 8 5-8 5V7Z" />,
-    stop: <rect x="8" y="8" width="8" height="8" rx="1" />,
-    spark: <path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" />,
-    plus: <path d="M12 5v14M5 12h14" />,
-    chevron: <path d="m9 18 6-6-6-6" />,
-    mic: <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0M12 19v3M8 22h8" />,
-  };
-
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-      {paths[name]}
-    </svg>
-  );
-}
-
-function estimateDuration(lines: ScriptLine[]) {
-  const words = lines.reduce((total, line) => total + line.text.trim().split(/\s+/).length, 0);
-  return Math.max(1, Math.round(words / 2.45));
-}
-
 export function Studio() {
-  const [lines, setLines] = useState(initialLines);
-  const [selectedLineId, setSelectedLineId] = useState(initialLines[0].id);
+  const [history, dispatch] = useReducer(historyReducer, undefined, () => ({
+    scene: createDemoScene(),
+    past: [],
+    future: [],
+  }));
+  const { scene } = history;
+  const { lines, characters, voiceAssignments } = scene;
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState("Loading scene…");
+  const [selectedLineId, setSelectedLineId] = useState("line-1");
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
-  const [playback, setPlayback] = useState<PlaybackState>("idle");
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [voiceAssignments, setVoiceAssignments] = useState<Record<string, string>>({
-    mara: "",
-    orion: "",
-  });
-  const [statusText, setStatusText] = useState("Ready for direction");
-  const [engineState, setEngineState] = useState<EngineState>("checking");
+  const [playing, setPlaying] = useState(false);
+  const [statusText, setStatusText] = useState("Ready for your first read");
+  const [engineReady, setEngineReady] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [showImport, setShowImport] = useState(false);
+  const [editorTab, setEditorTab] = useState<"direction" | "takes">(
+    "direction",
+  );
   const [tourStep, setTourStep] = useState<number | null>(null);
-  const [directorState, setDirectorState] = useState<DirectorState>("idle");
-  const [directorLineId, setDirectorLineId] = useState<string | null>(null);
-  const [directorUserTranscript, setDirectorUserTranscript] = useState("");
-  const [directorAgentTranscript, setDirectorAgentTranscript] = useState("");
-  const [directorError, setDirectorError] = useState("");
-  const [directorSessionId, setDirectorSessionId] = useState("");
-  const stopRequested = useRef(false);
+  const [speed, setSpeed] = useState(1);
   const activePlayback = useRef<TtsPlayback | null>(null);
-  const directorSession = useRef<DirectorSession | null>(null);
-
-  useEffect(() => {
-    const readVoices = () => setAvailableVoices(window.speechSynthesis?.getVoices() ?? []);
-    readVoices();
-    window.speechSynthesis?.addEventListener("voiceschanged", readVoices);
-    return () => window.speechSynthesis?.removeEventListener("voiceschanged", readVoices);
+  const playbackGeneration = useRef(0);
+  const stopPlayback = useCallback(() => {
+    playbackGeneration.current++;
+    activePlayback.current?.cancel();
+    activePlayback.current = null;
+    setPlaying(false);
+    setActiveLineId(null);
   }, []);
-
-  useEffect(
-    () => () => {
-      directorSession.current?.dispose();
-    },
-    [],
+  const selectedLine =
+    lines.find((line) => line.id === selectedLineId) ?? lines[0];
+  const selectedIndex = lines.findIndex((line) => line.id === selectedLine.id);
+  const selectedCharacter =
+    characters.find((character) => character.id === selectedLine.characterId) ??
+    characters[0];
+  const selectedTakes = scene.takes.filter(
+    (take) => take.lineId === selectedLine.id,
+  );
+  const wordCount = lines.reduce(
+    (count, line) =>
+      count + (line.text.trim() ? line.text.trim().split(/\s+/).length : 0),
+    0,
+  );
+  const duration = Math.max(1, Math.round(wordCount / (2.45 * speed)));
+  const activeTour = tourStep === null ? null : tourSteps[tourStep];
+  const directorContext = useMemo(
+    () => ({
+      lineId: selectedLine.id,
+      lineNumber: selectedIndex + 1,
+      characterName: selectedCharacter.name,
+      text: selectedLine.text,
+      direction: selectedLine.direction,
+    }),
+    [
+      selectedLine.id,
+      selectedLine.text,
+      selectedLine.direction,
+      selectedIndex,
+      selectedCharacter.name,
+    ],
   );
 
   useEffect(() => {
     let active = true;
-
-    fetch("/api/health")
-      .then((response) => response.json() as Promise<{ provider?: EngineState }>)
-      .then((health) => {
-        if (active && health.provider) setEngineState(health.provider);
-      })
-      .catch(() => {
-        if (active) setEngineState("browser-preview");
-      });
-
+    Promise.resolve().then(() => {
+      if (!active) return;
+      let restoredShared = false;
+      const shared = window.location.hash.startsWith("#scene=")
+        ? window.location.hash.slice(7)
+        : null;
+      try {
+        if (shared) {
+          dispatch({ type: "load", scene: decodeSharedScene(shared) });
+          restoredShared = true;
+          setStatusText("Shared scene loaded — your edits save on this device");
+        }
+      } catch {
+        setStatusText(
+          "This share link could not be read. Your saved scene is still available.",
+        );
+      }
+      if (!restoredShared) {
+        try {
+          const stored = localStorage.getItem(SCENE_STORAGE_KEY);
+          if (stored)
+            dispatch({
+              type: "load",
+              scene: validateScene(JSON.parse(stored)),
+            });
+        } catch {
+          setStatusText(
+            "Could not restore the previous scene. The sample is ready.",
+          );
+        }
+      }
+      setLoaded(true);
+    });
     return () => {
       active = false;
     };
   }, []);
 
-  const selectedLine = lines.find((line) => line.id === selectedLineId) ?? lines[0];
-  const selectedIndex = lines.findIndex((line) => line.id === selectedLine.id);
-  const duration = useMemo(() => estimateDuration(lines), [lines]);
+  useEffect(() => {
+    if (!loaded) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(scene));
+        setSaveState("Saved on this device");
+      } catch {
+        setSaveState("Could not save · export to keep a copy");
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [scene, loaded]);
 
-  const getCharacter = (characterId: string) =>
-    characters.find((character) => character.id === characterId) ?? characters[0];
-
-  const updateSelectedLine = (patch: Partial<ScriptLine>) => {
-    setLines((current) =>
-      current.map((line) => (line.id === selectedLine.id ? { ...line, ...patch } : line)),
-    );
-  };
-
-  const speakLine = async (line: ScriptLine) => {
-    const character = getCharacter(line.characterId);
-
-    try {
-      const playbackHandle = browserPreviewProvider.speak({
-        text: line.text,
-        voiceName: voiceAssignments[line.characterId],
-        fallbackVoiceIndex: line.characterId === "mara" ? 0 : 1,
-        rate: line.direction.includes("urgency") ? 1.04 : 0.93,
-        pitch: character.voiceHint === "bright" ? 1.08 : 0.95,
-        onStart: () => {
-          setActiveLineId(line.id);
-          setSelectedLineId(line.id);
-          setStatusText(`${character.name} is performing`);
-        },
-      });
-      activePlayback.current = playbackHandle;
-      await playbackHandle.done;
-      if (activePlayback.current === playbackHandle) activePlayback.current = null;
-    } catch (error) {
-      setStatusText(error instanceof Error ? error.message : "Voice preview is unavailable");
-    }
-  };
-
-  const playLines = async (sceneLines: ScriptLine[]) => {
-    activePlayback.current?.cancel();
-    stopRequested.current = false;
-    setPlayback("playing");
-    setStatusText("Streaming browser preview");
-    for (const line of sceneLines) {
-      if (stopRequested.current) break;
-      await speakLine(line);
-    }
-    setPlayback("idle");
-    setActiveLineId(null);
-    setStatusText(stopRequested.current ? "Playback stopped" : "Scene complete");
-  };
-
-  const playScene = () => playLines(lines);
-
-  const previewSelectedLine = async () => {
-    activePlayback.current?.cancel();
-    stopRequested.current = false;
-    setPlayback("playing");
-    await speakLine(selectedLine);
-    setPlayback("idle");
-    setActiveLineId(null);
-    setStatusText("Take ready");
-  };
-
-  const stopPlayback = () => {
-    stopRequested.current = true;
-    activePlayback.current?.cancel();
-    activePlayback.current = null;
-    setPlayback("idle");
-    setActiveLineId(null);
-    setStatusText("Playback stopped");
-  };
-
-  const addLine = () => {
-    const id = `line-${Date.now()}`;
-    const nextLine: ScriptLine = {
-      id,
-      characterId: selectedLine.characterId === "mara" ? "orion" : "mara",
-      direction: "gentle, precise",
-      text: "Add the next beat of your scene here.",
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/health", { signal: controller.signal })
+      .then((response) => response.json())
+      .then((data) => setEngineReady(data.provider === "assemblyai-ready"))
+      .catch(() => {});
+    const readVoices = () =>
+      setVoices(window.speechSynthesis?.getVoices() ?? []);
+    readVoices();
+    window.speechSynthesis?.addEventListener("voiceschanged", readVoices);
+    return () => {
+      controller.abort();
+      window.speechSynthesis?.removeEventListener("voiceschanged", readVoices);
     };
-    setLines((current) => [...current, nextLine]);
-    setSelectedLineId(id);
-  };
+  }, []);
 
-  const shareScene = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      setStatusText("Share link copied");
-    } catch {
-      setStatusText("Copy the current URL to share this scene");
-    }
-  };
+  useEffect(() => () => stopPlayback(), [stopPlayback]);
 
-  const startJudgeTour = () => {
-    setTourStep(0);
-    setSelectedLineId("line-1");
-    setStatusText("Judge tour started");
-  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== "z" ||
+        (event.target instanceof HTMLElement &&
+          /INPUT|TEXTAREA|SELECT/.test(event.target.tagName))
+      )
+        return;
+      event.preventDefault();
+      dispatch({ type: event.shiftKey ? "redo" : "undo" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-  const advanceJudgeTour = () => {
-    if (tourStep === null) return;
-    if (tourStep < judgeTourSteps.length - 1) {
-      const nextStep = tourStep + 1;
-      setTourStep(nextStep);
-      if (nextStep === 2) setSelectedLineId("line-3");
-      return;
-    }
+  const edit = (update: (current: SceneDocument) => SceneDocument) =>
+    dispatch({ type: "edit", update });
+  const updateLine = (patch: Partial<ScriptLine>) =>
+    edit((current) => ({
+      ...current,
+      lines: current.lines.map((line) =>
+        line.id === selectedLine.id ? { ...line, ...patch } : line,
+      ),
+    }));
 
-    const judgeCut = lines.map((line) =>
-      line.id === "line-3" ? { ...line, direction: "barely holding back" } : line,
-    );
-    setLines(judgeCut);
-    setTourStep(null);
-    setStatusText("Directing the judge cut");
-    void playLines(judgeCut);
-  };
-
-  const startDirector = async () => {
+  const playLines = async (readLines: ScriptLine[]) => {
     stopPlayback();
-    setTourStep(null);
-    directorSession.current?.dispose();
-    setDirectorUserTranscript("");
-    setDirectorAgentTranscript("");
-    setDirectorError("");
-    setDirectorSessionId("");
-    setDirectorLineId(selectedLine.id);
-
-    const lineId = selectedLine.id;
-    const lineNumber = selectedIndex + 1;
-    const character = getCharacter(selectedLine.characterId);
-    const session = new DirectorSession({
-      onState: setDirectorState,
-      onTranscript: (speaker, text) => {
-        if (speaker === "user") setDirectorUserTranscript(text);
-        else setDirectorAgentTranscript(text);
-      },
-      onRevision: (revision) => {
-        setLines((current) =>
-          current.map((line) =>
-            line.id === lineId
-              ? { ...line, text: revision.text, direction: revision.direction }
-              : line,
+    const generation = playbackGeneration.current;
+    setPlaying(true);
+    setStatusText("Playing device voice preview");
+    try {
+      for (const line of readLines) {
+        if (generation !== playbackGeneration.current) return;
+        if (!line.text.trim()) continue;
+        const characterIndex = Math.max(
+          0,
+          characters.findIndex(
+            (character) => character.id === line.characterId,
           ),
         );
-        setSelectedLineId(lineId);
-        setStatusText(`Director updated line ${String(lineNumber).padStart(2, "0")}`);
-      },
-      onSession: setDirectorSessionId,
-      onError: setDirectorError,
-    });
-    directorSession.current = session;
-
-    await session.connect({
-      lineId,
-      lineNumber,
-      characterName: character.name,
-      text: selectedLine.text,
-      direction: selectedLine.direction,
-    });
+        const character = characters[characterIndex];
+        const handle = browserPreviewProvider.speak({
+          text: line.text,
+          voiceName: voiceAssignments[line.characterId],
+          fallbackVoiceIndex: characterIndex,
+          rate: speed * (line.direction.includes("urgency") ? 1.04 : 0.93),
+          pitch: character.voiceHint === "bright" ? 1.08 : 0.95,
+          onStart: () => {
+            if (generation === playbackGeneration.current) {
+              setActiveLineId(line.id);
+              setStatusText(character.name + " · device preview");
+            }
+          },
+        });
+        activePlayback.current = handle;
+        await handle.done;
+      }
+      if (generation === playbackGeneration.current) {
+        setPlaying(false);
+        setActiveLineId(null);
+        setStatusText("Read complete");
+      }
+    } catch (error) {
+      if (generation === playbackGeneration.current) {
+        setPlaying(false);
+        setActiveLineId(null);
+        setStatusText(
+          error instanceof Error ? error.message : "Could not play this take",
+        );
+      }
+    }
   };
 
-  const endDirector = () => {
-    directorSession.current?.end();
-    setStatusText("Director session ended");
+  const applyRevision = useCallback(
+    (revision: DirectorRevision, lineId: string) => {
+      dispatch({
+        type: "edit",
+        update: (current) => {
+          const original = current.lines.find((line) => line.id === lineId);
+          if (!original) return current;
+          const revised = { ...original, ...revision };
+          return {
+            ...current,
+            lines: current.lines.map((line) =>
+              line.id === lineId ? revised : line,
+            ),
+            takes: [
+              ...current.takes,
+              makeTake(original, "Saved take"),
+              makeTake(revised, "Director"),
+            ].slice(-200),
+          };
+        },
+      });
+      setStatusText("Director revision saved · compare it in Takes");
+    },
+    [],
+  );
+
+  const loadScene = (next: SceneDocument) => {
+    stopPlayback();
+    dispatch({ type: "edit", update: () => next });
+    setSelectedLineId(next.lines[0].id);
+    setStatusText(next.title + " is ready");
+    window.history.replaceState(null, "", window.location.pathname);
   };
-
-  const engineLabel = {
-    checking: "Checking voice engine",
-    "browser-preview": "Browser preview · API key not configured",
-    "assemblyai-ready": "AssemblyAI Voice Agent ready",
-  }[engineState];
-
-  const directorStatus = {
-    idle: "Ready",
-    connecting: "Connecting",
-    listening: "Listening",
-    thinking: "Thinking",
-    speaking: "Speaking",
-    ending: "Ending",
-    error: "Needs attention",
-  }[directorState];
-
-  const directorActive = !["idle", "error"].includes(directorState);
-  const directedLine = directorLineId
-    ? lines.find((line) => line.id === directorLineId)
-    : selectedLine;
-  const directedCharacter = getCharacter(directedLine?.characterId ?? selectedLine.characterId);
-  const directedLineNumber = directedLine
-    ? lines.findIndex((line) => line.id === directedLine.id) + 1
-    : selectedIndex + 1;
-
-  const activeTour = tourStep === null ? null : judgeTourSteps[tourStep];
+  const shareScene = async () => {
+    try {
+      const url =
+        window.location.origin +
+        window.location.pathname +
+        "#scene=" +
+        encodeSharedScene(scene);
+      await navigator.clipboard.writeText(url);
+      setStatusText(
+        "Scene snapshot link copied — includes your dialogue and cast",
+      );
+    } catch (error) {
+      setStatusText(
+        error instanceof Error
+          ? error.message
+          : "Could not copy the scene link",
+      );
+    }
+  };
+  const slug = scene.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "scene";
 
   return (
     <main className="app-shell">
@@ -315,94 +369,260 @@ export function Studio() {
           </span>
           <span>SceneVox</span>
         </a>
-        <div className="project-trail" aria-label="Current project">
-          <span>Projects</span>
-          <Icon name="chevron" />
-          <strong>The Last Garden</strong>
+        <div className="project-trail">
+          <span>Studio</span>
+          <span aria-hidden="true">›</span>
+          <strong>{scene.title}</strong>
         </div>
         <div className="top-actions">
-          <span className="save-state"><i /> Saved</span>
-          <button className="ghost-button tour-trigger" type="button" onClick={startJudgeTour}>60s judge tour</button>
-          <button className="ghost-button share-button" type="button" onClick={shareScene}>Share scene</button>
-          <div className="avatar" aria-label="Sagar Patel">SP</div>
+          <span className="save-state">
+            <i />
+            {saveState}
+          </span>
+          <button
+            className="ghost-button tour-trigger"
+            type="button"
+            onClick={() => {
+              setTourStep(0);
+              setSelectedLineId(lines[Math.min(2, lines.length - 1)].id);
+            }}
+          >
+            60s judge tour
+          </button>
+          <button
+            className="ghost-button share-button"
+            type="button"
+            onClick={shareScene}
+          >
+            Share scene ↗
+          </button>
         </div>
       </header>
 
       <section className="hero-strip">
         <div>
-          <p className="eyebrow">Streaming performance studio</p>
-          <h1>Hear the scene<br />before you shoot it.</h1>
+          <p className="eyebrow">The writer’s rehearsal room</p>
+          <h1>
+            Give your words
+            <br />a first performance.
+          </h1>
         </div>
         <p className="hero-copy">
-          Cast every role, direct every line, and audition a full performance while the idea is still fresh.
+          Write the scene. Speak your direction. Find the take that makes
+          someone feel something.
         </p>
-        <div className={`engine-pill ${engineState}`}>
+        <div
+          className={
+            "engine-pill " + (engineReady ? "assemblyai-ready" : "checking")
+          }
+        >
           <span className="engine-dot" />
-          <span>{engineLabel}</span>
+          <span>
+            {engineReady
+              ? "AssemblyAI Director ready"
+              : "Device preview available"}
+          </span>
         </div>
       </section>
 
+      <nav className="workspace-toolbar" aria-label="Scene tools">
+        <div>
+          <button
+            type="button"
+            className="toolbar-button"
+            onClick={() => setShowImport(true)}
+          >
+            ＋ Import script
+          </button>
+          <details className="export-menu">
+            <summary>Export ↓</summary>
+            <div>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadFile(
+                    screenplayText(scene),
+                    slug + ".txt",
+                    "text/plain",
+                  )
+                }
+              >
+                Screenplay (.txt)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadFile(
+                    JSON.stringify(scene, null, 2),
+                    slug + ".scenevox.json",
+                    "application/json",
+                  )
+                }
+              >
+                Scene + takes (.json)
+              </button>
+            </div>
+          </details>
+        </div>
+        <div>
+          <button
+            className="toolbar-button subtle"
+            type="button"
+            onClick={() => dispatch({ type: "undo" })}
+            disabled={!history.past.length}
+            aria-label="Undo scene edit"
+          >
+            ↶ Undo
+          </button>
+          <button
+            className="toolbar-button subtle"
+            type="button"
+            onClick={() => dispatch({ type: "redo" })}
+            disabled={!history.future.length}
+            aria-label="Redo scene edit"
+          >
+            ↷ Redo
+          </button>
+          <span className="toolbar-divider" />
+          <button
+            type="button"
+            className="toolbar-button subtle"
+            onClick={() => loadScene(createDemoScene())}
+          >
+            Load demo
+          </button>
+        </div>
+      </nav>
+
       <section className="studio" id="studio">
-        <div className={`panel script-panel ${activeTour?.target === "script" ? "tour-target" : ""}`}>
+        <div
+          className={
+            "panel script-panel " +
+            (activeTour?.target === "script" ? "tour-target" : "")
+          }
+        >
           <div className="panel-header">
             <div>
-              <p className="kicker">Script</p>
-              <h2>The Last Garden</h2>
+              <p className="kicker">Your scene</p>
+              <label className="sr-only" htmlFor="scene-title">
+                Scene title
+              </label>
+              <input
+                className="scene-title"
+                id="scene-title"
+                value={scene.title}
+                maxLength={80}
+                onChange={(event) =>
+                  edit((current) => ({ ...current, title: event.target.value }))
+                }
+              />
             </div>
-            <span className="meta-chip">Scene 04 · {duration}s</span>
+            <span className="meta-chip">
+              {lines.length} lines · {wordCount} words
+            </span>
           </div>
-
           <div className="scene-note">
-            <span>INT. ORBITAL SEED VAULT — ARTIFICIAL DAWN</span>
-            <p>A failing ship gives its garden one last sunrise.</p>
+            <span>{scene.setting}</span>
+            <p>{scene.premise}</p>
           </div>
-
           <div className="script-lines" aria-label="Scene dialogue">
             {lines.map((line, index) => {
-              const character = getCharacter(line.characterId);
-              const isSelected = line.id === selectedLine.id;
-              const isActive = line.id === activeLineId;
+              const character =
+                characters.find((item) => item.id === line.characterId) ??
+                characters[0];
               return (
                 <button
-                  className={`script-line ${isSelected ? "selected" : ""} ${isActive ? "active" : ""}`}
-                  key={line.id}
-                  onClick={() => setSelectedLineId(line.id)}
                   type="button"
-                  style={{ "--character": character.color } as React.CSSProperties}
+                  key={line.id}
+                  className={
+                    "script-line " +
+                    (line.id === selectedLine.id ? "selected " : "") +
+                    (line.id === activeLineId ? "active" : "")
+                  }
+                  onClick={() => setSelectedLineId(line.id)}
+                  aria-pressed={line.id === selectedLine.id}
+                  aria-label={
+                    "Select line " + (index + 1) + ": " + character.name
+                  }
+                  style={
+                    { "--character": character.color } as React.CSSProperties
+                  }
                 >
-                  <span className="line-number">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="line-number">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
                   <span className="line-copy">
                     <span className="speaker-row">
                       <strong>{character.name}</strong>
                       <em>{line.direction}</em>
                     </span>
-                    <span className="dialogue">{line.text}</span>
+                    <span className="dialogue">
+                      {line.text || "An unwritten beat…"}
+                    </span>
                   </span>
-                  <span className="line-play" aria-hidden="true"><Icon name="play" /></span>
+                  <span className="line-play" aria-hidden="true">
+                    ↗
+                  </span>
                 </button>
               );
             })}
           </div>
-
-          <button className="add-line" type="button" onClick={addLine}>
-            <Icon name="plus" /> Add a line
+          <button
+            className="add-line"
+            type="button"
+            disabled={lines.length >= 100}
+            onClick={() => {
+              const id = crypto.randomUUID();
+              edit((current) => ({
+                ...current,
+                lines: [
+                  ...current.lines,
+                  {
+                    id,
+                    characterId:
+                      characters[
+                        (characters.findIndex(
+                          (item) => item.id === selectedLine.characterId,
+                        ) +
+                          1) %
+                          characters.length
+                      ].id,
+                    direction: "natural, conversational",
+                    text: "",
+                  },
+                ],
+              }));
+              setSelectedLineId(id);
+            }}
+          >
+            ＋ Add a line
           </button>
         </div>
 
-        <aside className={`panel cast-panel ${activeTour?.target === "cast" ? "tour-target" : ""}`}>
+        <aside className="panel cast-panel">
           <div className="panel-header compact">
             <div>
               <p className="kicker">Cast</p>
-              <h2>Voices</h2>
+              <h2>Find their voices.</h2>
             </div>
-            <span className="meta-chip">2 roles</span>
+            <span className="meta-chip">{characters.length} roles</span>
           </div>
-
+          <p className="cast-caption">
+            Device voices for script rehearsal. The live Director speaks with
+            AssemblyAI.
+          </p>
           <div className="cast-list">
             {characters.map((character) => (
-              <article className="cast-card" key={character.id}>
-                <div className="character-avatar" style={{ background: character.color }}>
-                  {character.name.split(" ").map((part) => part[0]).join("")}
+              <article key={character.id} className="cast-card">
+                <div
+                  className="character-avatar"
+                  style={{ background: character.color }}
+                >
+                  {character.name
+                    .split(" ")
+                    .map((part) => part[0])
+                    .slice(0, 2)
+                    .join("")}
                 </div>
                 <div className="cast-copy">
                   <strong>{character.name}</strong>
@@ -412,185 +632,341 @@ export function Studio() {
                     <select
                       value={voiceAssignments[character.id] ?? ""}
                       onChange={(event) =>
-                        setVoiceAssignments((current) => ({
+                        edit((current) => ({
                           ...current,
-                          [character.id]: event.target.value,
+                          voiceAssignments: {
+                            ...current.voiceAssignments,
+                            [character.id]: event.target.value,
+                          },
                         }))
                       }
                     >
-                      <option value="">Automatic · best local match</option>
-                      {availableVoices.length ? (
-                        availableVoices.slice(0, 12).map((voice) => (
-                          <option key={voice.name} value={voice.name}>{voice.name}</option>
-                        ))
-                      ) : null}
+                      <option value="">Automatic local voice</option>
+                      {voices.map((voice) => (
+                        <option key={voice.voiceURI} value={voice.name}>
+                          {voice.name} · {voice.lang}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>
               </article>
             ))}
           </div>
-
           <div className="cast-tip">
-            <Icon name="spark" />
-            <p><strong>Director&apos;s note</strong><br />Contrast the voices. Mara should feel close; Orion should feel like light through glass.</p>
+            <span aria-hidden="true">✦</span>
+            <p>
+              <strong>The subtext is the story.</strong>
+              <br />A different intention can change the same words. Save two
+              takes, then hear which one lands.
+            </p>
+          </div>
+          <div className="scene-metrics">
+            <div>
+              <strong>{duration}s</strong>
+              <span>estimated read</span>
+            </div>
+            <div>
+              <strong>
+                {
+                  scene.takes.filter((take) => take.source === "Director")
+                    .length
+                }
+              </strong>
+              <span>Director takes</span>
+            </div>
           </div>
         </aside>
 
-        <aside className={`panel direction-panel ${activeTour?.target === "direction" ? "tour-target" : ""}`}>
+        <aside
+          className={
+            "panel direction-panel " +
+            (activeTour?.target === "direction" ? "tour-target" : "")
+          }
+        >
           <div className="panel-header compact">
             <div>
-              <p className="kicker">Direction</p>
+              <p className="kicker">The close-up</p>
               <h2>Line {String(selectedIndex + 1).padStart(2, "0")}</h2>
             </div>
-            <button className="icon-button" type="button" onClick={previewSelectedLine} aria-label="Preview selected line">
-              <Icon name="play" />
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void playLines([selectedLine])}
+              aria-label="Preview selected line"
+            >
+              ▷
             </button>
           </div>
-
-          <label className="field-label" htmlFor="line-text">Dialogue</label>
-          <textarea
-            id="line-text"
-            value={selectedLine.text}
-            onChange={(event) => updateSelectedLine({ text: event.target.value })}
-            rows={5}
+          <DirectorBooth
+            key={scene.characters.map((character) => character.id).join("-")}
+            context={directorContext}
+            enabled={engineReady}
+            playing={playing}
+            onStart={stopPlayback}
+            onRevision={applyRevision}
           />
-
-          <div className="field-label">Performance</div>
-          <div className="direction-chips">
-            {directionOptions.map((direction) => (
-              <button
-                key={direction}
-                type="button"
-                className={selectedLine.direction === direction ? "active" : ""}
-                aria-pressed={selectedLine.direction === direction}
-                onClick={() => updateSelectedLine({ direction })}
-              >
-                {direction}
-              </button>
-            ))}
+          <div className="editor-tabs" role="tablist" aria-label="Line editor">
+            <button
+              type="button"
+              role="tab"
+              id="direction-tab"
+              aria-controls="direction-editor"
+              aria-selected={editorTab === "direction"}
+              onClick={() => setEditorTab("direction")}
+            >
+              Direction
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="takes-tab"
+              aria-controls="takes-editor"
+              aria-selected={editorTab === "takes"}
+              onClick={() => setEditorTab("takes")}
+            >
+              Takes <span>{selectedTakes.length}</span>
+            </button>
           </div>
-
-          <label className="field-label" htmlFor="character-select">Speaker</label>
-          <select
-            id="character-select"
-            className="wide-select"
-            value={selectedLine.characterId}
-            onChange={(event) => updateSelectedLine({ characterId: event.target.value })}
-          >
-            {characters.map((character) => (
-              <option key={character.id} value={character.id}>{character.name}</option>
-            ))}
-          </select>
-
-          <section className={`director-card ${directorActive ? "active" : ""}`} aria-live="polite">
-            <div className="director-card-header">
-              <div>
-                <span className="director-kicker">AssemblyAI Director</span>
-                <strong>{directorStatus}</strong>
+          {editorTab === "direction" ? (
+            <div
+              id="direction-editor"
+              role="tabpanel"
+              aria-labelledby="direction-tab"
+            >
+              <label className="field-label" htmlFor="line-text">
+                Dialogue
+              </label>
+              <textarea
+                id="line-text"
+                value={selectedLine.text}
+                maxLength={1_000}
+                rows={4}
+                onChange={(event) => updateLine({ text: event.target.value })}
+              />
+              <label className="field-label" htmlFor="line-direction">
+                Performance direction
+              </label>
+              <input
+                className="direction-input"
+                id="line-direction"
+                value={selectedLine.direction}
+                maxLength={100}
+                onChange={(event) =>
+                  updateLine({ direction: event.target.value })
+                }
+              />
+              <div className="direction-chips">
+                {directionOptions.map((direction) => (
+                  <button
+                    key={direction}
+                    type="button"
+                    aria-pressed={selectedLine.direction === direction}
+                    className={
+                      selectedLine.direction === direction ? "active" : ""
+                    }
+                    onClick={() => updateLine({ direction })}
+                  >
+                    {direction}
+                  </button>
+                ))}
               </div>
-              <span className={`director-orb ${directorState}`} aria-hidden="true">
-                <Icon name="mic" />
-              </span>
-            </div>
-
-            {directorActive || directorUserTranscript || directorAgentTranscript || directorError ? (
-              <div className="director-conversation">
-                <span className="director-context">
-                  Line {String(directedLineNumber).padStart(2, "0")} · {directedCharacter.name}
-                </span>
-                {directorUserTranscript ? (
-                  <p><strong>You</strong>{directorUserTranscript}</p>
-                ) : null}
-                {directorAgentTranscript ? (
-                  <p className="agent"><strong>Director</strong>{directorAgentTranscript}</p>
-                ) : null}
-                {directorError ? <p className="director-error">{directorError}</p> : null}
-              </div>
-            ) : (
-              <p className="director-intro">
-                Select a line, then describe the emotional change out loud. The director can rewrite it in place.
-              </p>
-            )}
-
-            <div className="director-actions">
-              <span>
-                {directorSessionId ? `Live · ${directorSessionId.slice(-6)}` : "Winter voice · 5 min cap"}
-              </span>
-              {directorActive ? (
-                <button type="button" className="director-button end" onClick={endDirector}>
-                  <Icon name="stop" /> End
-                </button>
-              ) : (
+              <label className="field-label" htmlFor="character-select">
+                Speaker
+              </label>
+              <select
+                id="character-select"
+                className="wide-select"
+                value={selectedLine.characterId}
+                onChange={(event) =>
+                  updateLine({ characterId: event.target.value })
+                }
+              >
+                {characters.map((character) => (
+                  <option key={character.id} value={character.id}>
+                    {character.name}
+                  </option>
+                ))}
+              </select>
+              <div className="line-tools">
                 <button
                   type="button"
-                  className="director-button"
-                  onClick={startDirector}
-                  disabled={engineState !== "assemblyai-ready" || directorState === "connecting"}
+                  onClick={() => {
+                    edit((current) => ({
+                      ...current,
+                      takes: [
+                        ...current.takes,
+                        makeTake(selectedLine, "Saved take"),
+                      ].slice(-200),
+                    }));
+                    setStatusText("Take saved for comparison");
+                  }}
                 >
-                  <Icon name="mic" /> Talk to Director
+                  ＋ Save take
                 </button>
-              )}
+                <button
+                  type="button"
+                  disabled={lines.length === 1}
+                  onClick={() => {
+                    stopPlayback();
+                    edit((current) => ({
+                      ...current,
+                      lines: current.lines.filter(
+                        (line) => line.id !== selectedLine.id,
+                      ),
+                      takes: current.takes.filter(
+                        (take) => take.lineId !== selectedLine.id,
+                      ),
+                    }));
+                    setSelectedLineId(lines[Math.max(0, selectedIndex - 1)].id);
+                  }}
+                >
+                  Delete line
+                </button>
+              </div>
             </div>
-          </section>
+          ) : (
+            <div id="takes-editor" role="tabpanel" aria-labelledby="takes-tab">
+              <TakeComparison
+                takes={selectedTakes}
+                currentText={selectedLine.text}
+                onPreview={(take) =>
+                  void playLines([
+                    {
+                      ...selectedLine,
+                      text: take.text,
+                      direction: take.direction,
+                    },
+                  ])
+                }
+                onRestore={(take: SceneTake) => {
+                  updateLine({ text: take.text, direction: take.direction });
+                  setStatusText("Take restored — undo is available");
+                }}
+              />
+            </div>
+          )}
         </aside>
 
         <div className="performance-bar">
           <div className="now-playing">
-            <span className={`live-orb ${playback === "playing" ? "playing" : ""}`}>
-              {playback === "playing" ? <Icon name="spark" /> : <Icon name="play" />}
+            <span
+              className={"live-orb " + (playing ? "playing" : "")}
+              aria-hidden="true"
+            >
+              {playing ? "✦" : "▷"}
             </span>
             <div>
-              <span>{statusText}</span>
-              <strong>{activeLineId ? getCharacter(lines.find((line) => line.id === activeLineId)?.characterId ?? "mara").name : "Full scene"}</strong>
+              <span role="status">{statusText}</span>
+              <strong>
+                {activeLineId
+                  ? characters.find(
+                      (character) =>
+                        character.id ===
+                        lines.find((line) => line.id === activeLineId)
+                          ?.characterId,
+                    )?.name
+                  : scene.title}
+              </strong>
             </div>
           </div>
-
-          <div className={`waveform ${playback === "playing" ? "playing" : ""}`} aria-label="Audio activity">
-            {Array.from({ length: 34 }, (_, index) => (
-              <i key={index} style={{ "--delay": `${(index % 9) * 45}ms`, "--height": `${24 + ((index * 17) % 64)}%` } as React.CSSProperties} />
+          <div
+            className={"waveform " + (playing ? "playing" : "")}
+            aria-hidden="true"
+          >
+            {Array.from({ length: 24 }, (_, index) => (
+              <i
+                key={index}
+                style={
+                  {
+                    "--delay": (index % 9) * 45 + "ms",
+                    "--height": 24 + ((index * 17) % 64) + "%",
+                  } as React.CSSProperties
+                }
+              />
             ))}
           </div>
-
-          <div className="stream-stats">
-            <span><strong>{duration}s</strong> est. scene</span>
-            <span><strong>2</strong> voices</span>
-          </div>
-
-          {playback === "playing" ? (
-            <button className="primary-button stop" type="button" onClick={stopPlayback}>
-              <Icon name="stop" /> Stop
-            </button>
-          ) : (
-            <button className="primary-button" type="button" onClick={playScene}>
-              <Icon name="play" /> Stream scene
-            </button>
-          )}
+          <label className="playback-speed">
+            <span>Device preview</span>
+            <select
+              value={speed}
+              aria-label="Playback speed"
+              onChange={(event) => setSpeed(Number(event.target.value))}
+            >
+              <option value={0.8}>0.8×</option>
+              <option value={1}>1×</option>
+              <option value={1.2}>1.2×</option>
+            </select>
+          </label>
+          <button
+            className={"primary-button " + (playing ? "stop" : "")}
+            type="button"
+            onClick={() => {
+              if (playing) {
+                stopPlayback();
+                setStatusText("Playback stopped");
+              } else void playLines(lines);
+            }}
+          >
+            {playing ? "■ Stop" : "▷ Play scene"}
+          </button>
         </div>
       </section>
 
+      {showImport ? (
+        <ImportDialog
+          onImport={loadScene}
+          onClose={() => setShowImport(false)}
+        />
+      ) : null}
       {activeTour ? (
-        <aside className="tour-card" aria-live="polite" aria-label="60-second judge tour">
-          <div className="tour-progress" aria-label={`Step ${tourStep! + 1} of ${judgeTourSteps.length}`}>
-            {judgeTourSteps.map((step, index) => (
-              <i key={step.title} className={index === tourStep ? "active" : ""} />
+        <aside
+          className="tour-card"
+          aria-live="polite"
+          aria-label="60-second judge tour"
+        >
+          <div className="tour-progress">
+            {tourSteps.map((step, index) => (
+              <i
+                key={step.title}
+                className={index === tourStep ? "active" : ""}
+              />
             ))}
           </div>
-          <p>Judge tour · {tourStep! + 1}/{judgeTourSteps.length}</p>
+          <p>Judge tour · {(tourStep ?? 0) + 1}/3</p>
           <h2>{activeTour.title}</h2>
           <span>{activeTour.body}</span>
           <div className="tour-actions">
-            <button type="button" className="tour-close" onClick={() => setTourStep(null)}>Close</button>
-            <button type="button" className="primary-button" onClick={advanceJudgeTour}>
-              {tourStep === judgeTourSteps.length - 1 ? <><Icon name="play" /> Stream judge cut</> : <>Next <Icon name="chevron" /></>}
+            <button
+              type="button"
+              className="tour-close"
+              onClick={() => setTourStep(null)}
+            >
+              Close tour
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                if (tourStep === 2) {
+                  setEditorTab("takes");
+                  setTourStep(null);
+                } else {
+                  setTourStep((current) => (current ?? 0) + 1);
+                  setEditorTab("direction");
+                }
+              }}
+            >
+              {tourStep === 2 ? "Explore takes ↗" : "Next →"}
             </button>
           </div>
         </aside>
       ) : null}
-
       <footer>
-        <span>SceneVox · built for AssemblyAI Voice Hackathon Week</span>
-        <span>From script to performance, at the speed of thought.</span>
+        <span>SceneVox · A rehearsal room for the stories worth telling.</span>
+        <span>
+          Live Director by AssemblyAI · Scene playback uses device voices.
+        </span>
       </footer>
     </main>
   );

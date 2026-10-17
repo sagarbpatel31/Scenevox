@@ -37,3 +37,15 @@
 - Added cross-browser microphone resampling, echo cancellation, live transcripts, streamed PCM playback, barge-in cleanup, and explicit `session.end` teardown.
 - Added the `revise_selected_line` client tool so the spoken director can update the selected dialogue and performance direction in the studio.
 - Used inline session configuration because the dashboard Agent is still rate-limited and the Voice Agent API supports one-off dynamic agents without an `agent_id`.
+
+## 2026-10-17 — usable studio and end-to-end proof
+
+- Added script import, automatic multi-character casts, editable scene titles, custom direction, line removal, and playback speed controls.
+- Added versioned browser autosave, undo/redo, portable JSON export/import, screenplay export, and snapshot sharing that includes actual scene content.
+- Added original/saved/Director take history with audition and restore. Director changes preserve the previous take.
+- Added typed Director requests without microphone permission and live context updates when selection changes.
+- Fixed connection cancellation while microphone permission is pending, stale line targeting, page-navigation cleanup, error-state preservation, and stop/replay races.
+- Replaced per-render-quantum audio truncation with continuous resampling and 100 ms PCM batching; verified 24, 44.1, and 48 kHz input clocks.
+- Verified the real browser audio pipeline with synthetic speech through AssemblyAI. The requested line was revised, returned audio frames arrived, takes updated, and `session.ended` was received after 17.4 seconds of test runtime.
+- Verified typed direction revised two different selected lines in one real session in 7.3 seconds of test runtime.
+- Used the verification and React quality guidance to check browser exceptions, cancellation, storage, accessibility labels, and mobile layout.

@@ -13,9 +13,15 @@ export async function POST(request: Request) {
   }
 
   const origin = request.headers.get("origin");
-  const requestHost = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const requestHost =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   if (origin && requestHost) {
-    const originHost = new URL(origin).host;
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return Response.json({ error: "Invalid origin." }, { status: 403 });
+    }
     if (originHost !== requestHost) {
       return Response.json(
         { error: "Cross-origin token requests are not allowed." },
@@ -31,10 +37,19 @@ export async function POST(request: Request) {
     String(MAX_SESSION_DURATION_SECONDS),
   );
 
-  const response = await fetch(tokenUrl, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(tokenUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return Response.json(
+      { error: "AssemblyAI is temporarily unreachable. Please try again." },
+      { status: 502 },
+    );
+  }
 
   if (!response.ok) {
     return Response.json(
@@ -45,7 +60,10 @@ export async function POST(request: Request) {
 
   const payload = (await response.json()) as { token?: string };
   if (!payload.token) {
-    return Response.json({ error: "AssemblyAI returned an invalid token response." }, { status: 502 });
+    return Response.json(
+      { error: "AssemblyAI returned an invalid token response." },
+      { status: 502 },
+    );
   }
 
   return Response.json(

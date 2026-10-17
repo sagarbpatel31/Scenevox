@@ -28,3 +28,5 @@ AGENTS.md
 
 # typescript
 *.tsbuildinfo
+/test-results/
+/playwright-report/
