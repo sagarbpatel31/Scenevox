@@ -1,0 +1,21 @@
+# Build notes
+
+## 2026-10-15 — direction
+
+- Verified the official Luma event: October 15–23, online, teams of 1–4, $2,000 across 20 winners.
+- The event page does not publish a judging rubric, so the product strategy emphasizes immediate clarity, meaningful use of streaming TTS, memorable audio, and visible polish.
+- Selected a browser-first creative tool over a generic voice agent.
+- Working name: **SceneVox**.
+- Chose a provider abstraction because the event endpoint is known but the standalone TTS message schema is not publicly documented yet.
+- The first implementation will use browser speech only as a clearly labeled preview fallback.
+
+## 2026-10-15 — prototype and verification
+
+- Created the Next.js studio prototype with editable dialogue, casting, direction controls, scene playback, and responsive styling.
+- Verified a production build and lint pass.
+- Verified the root page returns HTTP 200 and contains the key studio content.
+- Verified `/api/health` returns the event endpoint and reports `browser-preview` without an API key.
+- Verified production dependencies have zero reported vulnerabilities.
+- Confirmed the official endpoint accepts a WebSocket upgrade and then rejects an unauthenticated client with: `Unauthorized: missing Authorization header or token query param`.
+- Confirmed AssemblyAI’s public TTS product page still labels the standalone API “coming soon”; the message schema remains an official early-access dependency.
+- Browser automation was blocked by an admin policy check, so visual layout and audio interaction still need one manual browser pass.
