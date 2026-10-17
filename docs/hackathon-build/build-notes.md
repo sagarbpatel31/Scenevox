@@ -19,3 +19,12 @@
 - Confirmed the official endpoint accepts a WebSocket upgrade and then rejects an unauthenticated client with: `Unauthorized: missing Authorization header or token query param`.
 - Confirmed AssemblyAI’s public TTS product page still labels the standalone API “coming soon”; the message schema remains an official early-access dependency.
 - Browser automation was blocked by an admin policy check, so visual layout and audio interaction still need one manual browser pass.
+
+## 2026-10-17 — judge-ready demo milestone
+
+- Published the initial prototype to `github.com/sagarbpatel31/Scenevox` on the `main` branch.
+- Added a typed provider contract and moved browser speech behind the provider boundary.
+- Added live engine readiness from `/api/health`; the UI distinguishes local preview, key readiness, and the still-pending official event protocol.
+- Added a three-step, 60-second judge tour that ends with a directed full-scene performance.
+- Made the share control functional by copying the current scene URL.
+- Kept the AssemblyAI key server-only and did not invent an unpublished WebSocket message schema.

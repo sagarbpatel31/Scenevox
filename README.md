@@ -11,10 +11,16 @@ Built for AssemblyAI’s **Voice hackathon week: Hack into speech**.
 - Per-line direction and instant replay
 - Full-scene playback with active-line and waveform feedback
 - Responsive studio interface
+- Guided 60-second judge tour with a scripted wow moment
 - Clearly labeled browser-speech preview when AssemblyAI credentials are absent
-- Server-only environment boundary for the event TTS endpoint
+- Live provider readiness from the server health route
+- Typed TTS provider contract so the event stream can replace preview speech without a UI rewrite
 
 The official standalone TTS API is early access. Its public product page still says “coming soon,” so this repository does not guess its WebSocket message schema. The real adapter should be added from the event’s official quickstart as soon as it is available.
+
+## Demo path
+
+Select **60s judge tour** in the top bar. The tour walks through the ready-made script, contrasting character voices, and the emotional direction change before streaming the judge cut.
 
 ## Run locally
 

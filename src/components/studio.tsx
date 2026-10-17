@@ -7,8 +7,29 @@ import {
   initialLines,
   type ScriptLine,
 } from "@/lib/studio-data";
+import { browserPreviewProvider } from "@/lib/tts/browser-preview";
+import type { TtsPlayback } from "@/lib/tts/contracts";
 
 type PlaybackState = "idle" | "playing";
+type EngineState = "checking" | "browser-preview" | "assemblyai-ready";
+
+const judgeTourSteps = [
+  {
+    title: "Start with a scene that is ready to perform",
+    body: "A judge can understand the premise, select a line, and hear the first performance in seconds.",
+    target: "script",
+  },
+  {
+    title: "Cast for contrast",
+    body: "Every character gets an independent voice, so writers can test whether a conversation feels distinct.",
+    target: "cast",
+  },
+  {
+    title: "Direct the emotional turn",
+    body: "We will change Mara's pivotal line to “barely holding back,” then stream the full scene.",
+    target: "direction",
+  },
+] as const;
 
 function Icon({ name }: { name: "play" | "stop" | "spark" | "plus" | "chevron" }) {
   const paths = {
@@ -42,14 +63,33 @@ export function Studio() {
     orion: "",
   });
   const [statusText, setStatusText] = useState("Ready for direction");
+  const [engineState, setEngineState] = useState<EngineState>("checking");
+  const [tourStep, setTourStep] = useState<number | null>(null);
   const stopRequested = useRef(false);
-  const resolveCurrentLine = useRef<(() => void) | null>(null);
+  const activePlayback = useRef<TtsPlayback | null>(null);
 
   useEffect(() => {
     const readVoices = () => setAvailableVoices(window.speechSynthesis?.getVoices() ?? []);
     readVoices();
     window.speechSynthesis?.addEventListener("voiceschanged", readVoices);
     return () => window.speechSynthesis?.removeEventListener("voiceschanged", readVoices);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    fetch("/api/health")
+      .then((response) => response.json() as Promise<{ provider?: EngineState }>)
+      .then((health) => {
+        if (active && health.provider) setEngineState(health.provider);
+      })
+      .catch(() => {
+        if (active) setEngineState("browser-preview");
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const selectedLine = lines.find((line) => line.id === selectedLineId) ?? lines[0];
@@ -65,49 +105,36 @@ export function Studio() {
     );
   };
 
-  const speakLine = (line: ScriptLine) =>
-    new Promise<void>((resolve) => {
-      if (!("speechSynthesis" in window)) {
-        setStatusText("Browser speech is not available here");
-        resolve();
-        return;
-      }
+  const speakLine = async (line: ScriptLine) => {
+    const character = getCharacter(line.characterId);
 
-      const character = getCharacter(line.characterId);
-      const utterance = new SpeechSynthesisUtterance(line.text);
-      const englishVoices = availableVoices.filter((voice) =>
-        voice.lang.toLowerCase().startsWith("en"),
-      );
-      const voicePool = englishVoices.length ? englishVoices : availableVoices;
-      const automaticVoice =
-        line.characterId === "mara" ? voicePool[0] : voicePool[Math.min(1, voicePool.length - 1)];
-      const chosenVoice =
-        availableVoices.find((voice) => voice.name === voiceAssignments[line.characterId]) ??
-        automaticVoice;
-      if (chosenVoice) utterance.voice = chosenVoice;
-      utterance.rate = line.direction.includes("urgency") ? 1.04 : 0.93;
-      utterance.pitch = character.voiceHint === "bright" ? 1.08 : 0.95;
-      utterance.onstart = () => {
-        setActiveLineId(line.id);
-        setSelectedLineId(line.id);
-        setStatusText(`${character.name} is performing`);
-      };
-      const finish = () => {
-        resolveCurrentLine.current = null;
-        resolve();
-      };
-      resolveCurrentLine.current = finish;
-      utterance.onend = finish;
-      utterance.onerror = finish;
-      window.speechSynthesis.speak(utterance);
-    });
+    try {
+      const playbackHandle = browserPreviewProvider.speak({
+        text: line.text,
+        voiceName: voiceAssignments[line.characterId],
+        fallbackVoiceIndex: line.characterId === "mara" ? 0 : 1,
+        rate: line.direction.includes("urgency") ? 1.04 : 0.93,
+        pitch: character.voiceHint === "bright" ? 1.08 : 0.95,
+        onStart: () => {
+          setActiveLineId(line.id);
+          setSelectedLineId(line.id);
+          setStatusText(`${character.name} is performing`);
+        },
+      });
+      activePlayback.current = playbackHandle;
+      await playbackHandle.done;
+      if (activePlayback.current === playbackHandle) activePlayback.current = null;
+    } catch (error) {
+      setStatusText(error instanceof Error ? error.message : "Voice preview is unavailable");
+    }
+  };
 
-  const playScene = async () => {
-    window.speechSynthesis?.cancel();
+  const playLines = async (sceneLines: ScriptLine[]) => {
+    activePlayback.current?.cancel();
     stopRequested.current = false;
     setPlayback("playing");
     setStatusText("Streaming browser preview");
-    for (const line of lines) {
+    for (const line of sceneLines) {
       if (stopRequested.current) break;
       await speakLine(line);
     }
@@ -116,8 +143,10 @@ export function Studio() {
     setStatusText(stopRequested.current ? "Playback stopped" : "Scene complete");
   };
 
+  const playScene = () => playLines(lines);
+
   const previewSelectedLine = async () => {
-    window.speechSynthesis?.cancel();
+    activePlayback.current?.cancel();
     stopRequested.current = false;
     setPlayback("playing");
     await speakLine(selectedLine);
@@ -128,8 +157,8 @@ export function Studio() {
 
   const stopPlayback = () => {
     stopRequested.current = true;
-    window.speechSynthesis?.cancel();
-    resolveCurrentLine.current?.();
+    activePlayback.current?.cancel();
+    activePlayback.current = null;
     setPlayback("idle");
     setActiveLineId(null);
     setStatusText("Playback stopped");
@@ -146,6 +175,47 @@ export function Studio() {
     setLines((current) => [...current, nextLine]);
     setSelectedLineId(id);
   };
+
+  const shareScene = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setStatusText("Share link copied");
+    } catch {
+      setStatusText("Copy the current URL to share this scene");
+    }
+  };
+
+  const startJudgeTour = () => {
+    setTourStep(0);
+    setSelectedLineId("line-1");
+    setStatusText("Judge tour started");
+  };
+
+  const advanceJudgeTour = () => {
+    if (tourStep === null) return;
+    if (tourStep < judgeTourSteps.length - 1) {
+      const nextStep = tourStep + 1;
+      setTourStep(nextStep);
+      if (nextStep === 2) setSelectedLineId("line-3");
+      return;
+    }
+
+    const judgeCut = lines.map((line) =>
+      line.id === "line-3" ? { ...line, direction: "barely holding back" } : line,
+    );
+    setLines(judgeCut);
+    setTourStep(null);
+    setStatusText("Directing the judge cut");
+    void playLines(judgeCut);
+  };
+
+  const engineLabel = {
+    checking: "Checking voice engine",
+    "browser-preview": "Browser preview · API key not configured",
+    "assemblyai-ready": "AssemblyAI key detected · protocol pending",
+  }[engineState];
+
+  const activeTour = tourStep === null ? null : judgeTourSteps[tourStep];
 
   return (
     <main className="app-shell">
@@ -165,7 +235,8 @@ export function Studio() {
         </div>
         <div className="top-actions">
           <span className="save-state"><i /> Saved</span>
-          <button className="ghost-button" type="button">Share scene</button>
+          <button className="ghost-button tour-trigger" type="button" onClick={startJudgeTour}>60s judge tour</button>
+          <button className="ghost-button share-button" type="button" onClick={shareScene}>Share scene</button>
           <div className="avatar" aria-label="Sagar Patel">SP</div>
         </div>
       </header>
@@ -178,14 +249,14 @@ export function Studio() {
         <p className="hero-copy">
           Cast every role, direct every line, and audition a full performance while the idea is still fresh.
         </p>
-        <div className="engine-pill">
+        <div className={`engine-pill ${engineState}`}>
           <span className="engine-dot" />
-          <span><strong>Browser preview</strong> · AssemblyAI adapter ready</span>
+          <span>{engineLabel}</span>
         </div>
       </section>
 
       <section className="studio" id="studio">
-        <div className="panel script-panel">
+        <div className={`panel script-panel ${activeTour?.target === "script" ? "tour-target" : ""}`}>
           <div className="panel-header">
             <div>
               <p className="kicker">Script</p>
@@ -231,7 +302,7 @@ export function Studio() {
           </button>
         </div>
 
-        <aside className="panel cast-panel">
+        <aside className={`panel cast-panel ${activeTour?.target === "cast" ? "tour-target" : ""}`}>
           <div className="panel-header compact">
             <div>
               <p className="kicker">Cast</p>
@@ -279,7 +350,7 @@ export function Studio() {
           </div>
         </aside>
 
-        <aside className="panel direction-panel">
+        <aside className={`panel direction-panel ${activeTour?.target === "direction" ? "tour-target" : ""}`}>
           <div className="panel-header compact">
             <div>
               <p className="kicker">Direction</p>
@@ -359,6 +430,25 @@ export function Studio() {
           )}
         </div>
       </section>
+
+      {activeTour ? (
+        <aside className="tour-card" aria-live="polite" aria-label="60-second judge tour">
+          <div className="tour-progress" aria-label={`Step ${tourStep! + 1} of ${judgeTourSteps.length}`}>
+            {judgeTourSteps.map((step, index) => (
+              <i key={step.title} className={index === tourStep ? "active" : ""} />
+            ))}
+          </div>
+          <p>Judge tour · {tourStep! + 1}/{judgeTourSteps.length}</p>
+          <h2>{activeTour.title}</h2>
+          <span>{activeTour.body}</span>
+          <div className="tour-actions">
+            <button type="button" className="tour-close" onClick={() => setTourStep(null)}>Close</button>
+            <button type="button" className="primary-button" onClick={advanceJudgeTour}>
+              {tourStep === judgeTourSteps.length - 1 ? <><Icon name="play" /> Stream judge cut</> : <>Next <Icon name="chevron" /></>}
+            </button>
+          </div>
+        </aside>
+      ) : null}
 
       <footer>
         <span>SceneVox · built for AssemblyAI Voice Hackathon Week</span>

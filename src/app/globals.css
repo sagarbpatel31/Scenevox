@@ -84,6 +84,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .save-state i { display: block; width: 7px; height: 7px; border-radius: 50%; background: #6eaa37; }
 .ghost-button { border: 1px solid var(--line); background: transparent; padding: 9px 13px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; }
 .ghost-button:hover { background: var(--panel); }
+.tour-trigger { background: var(--ink); border-color: var(--ink); color: white; }
+.tour-trigger:hover { background: #303128; }
 .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--violet); font-size: 11px; font-weight: 800; }
 
 .hero-strip {
@@ -101,6 +103,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .hero-copy { margin: 0; max-width: 390px; font-size: 15px; line-height: 1.55; color: var(--muted); }
 .engine-pill { border: 1px solid var(--line); background: rgba(251, 250, 245, 0.65); border-radius: 999px; padding: 11px 14px; display: flex; align-items: center; gap: 9px; font-size: 11px; white-space: nowrap; }
 .engine-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(182, 239, 91, 0.22); }
+.engine-pill.checking .engine-dot { background: #a3a39a; box-shadow: 0 0 0 4px rgba(163, 163, 154, 0.18); animation: pulse 1.2s ease-in-out infinite; }
+.engine-pill.assemblyai-ready .engine-dot { background: var(--violet); box-shadow: 0 0 0 4px rgba(108, 99, 217, 0.18); }
 
 .studio {
   max-width: 1480px;
@@ -113,6 +117,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 }
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; box-shadow: 0 12px 30px rgba(36, 34, 23, 0.04); }
+.panel.tour-target { position: relative; z-index: 11; border-color: var(--violet); box-shadow: 0 0 0 4px rgba(108, 99, 217, 0.14), 0 18px 44px rgba(36, 34, 23, 0.12); }
 .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 25px 19px; border-bottom: 1px solid var(--line); }
 .panel-header.compact { padding: 22px 21px 17px; }
 .panel-header h2 { margin: 0; font-size: 22px; letter-spacing: -0.045em; }
@@ -181,6 +186,30 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visi
 .primary-button.stop { background: var(--coral); }
 .primary-button svg { width: 17px; height: 17px; }
 
+.tour-card {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  width: min(390px, calc(100vw - 32px));
+  padding: 22px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px;
+  background: var(--ink);
+  color: white;
+  box-shadow: 0 24px 70px rgba(23, 24, 18, 0.28);
+}
+.tour-progress { display: flex; gap: 5px; margin-bottom: 18px; }
+.tour-progress i { width: 26px; height: 3px; border-radius: 99px; background: #494a42; }
+.tour-progress i.active { background: var(--lime); }
+.tour-card > p { margin: 0 0 8px; color: var(--lime); font-size: 9px; font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
+.tour-card h2 { margin: 0 0 9px; font: 500 25px/1.05 Georgia, serif; letter-spacing: -0.035em; }
+.tour-card > span { display: block; color: #bcbbb3; font-size: 12px; line-height: 1.55; }
+.tour-actions { margin-top: 21px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tour-actions .primary-button { min-width: 118px; }
+.tour-close { border: 0; background: transparent; color: #92938b; font-size: 11px; font-weight: 750; cursor: pointer; }
+.tour-close:hover { color: white; }
+
 footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
@@ -202,7 +231,9 @@ footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: fle
 
 @media (max-width: 760px) {
   .topbar { grid-template-columns: 1fr auto; padding: 0 18px; }
-  .project-trail, .save-state, .ghost-button { display: none; }
+  .project-trail, .save-state, .share-button, .avatar { display: none; }
+  .top-actions { gap: 0; }
+  .tour-trigger { padding: 8px 11px; font-size: 10px; }
   .hero-strip { padding: 32px 20px 24px; grid-template-columns: 1fr; gap: 20px; }
   .engine-pill { width: max-content; }
   .studio { padding: 0 12px 20px; display: flex; flex-direction: column; }
@@ -212,6 +243,7 @@ footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: fle
   .performance-bar { order: 4; grid-template-columns: 1fr auto; gap: 14px; min-height: 104px; position: sticky; bottom: 8px; z-index: 10; }
   .waveform { grid-column: 1 / -1; grid-row: 2; height: 24px; }
   .stream-stats { display: none; }
+  .tour-card { right: 16px; bottom: 16px; padding: 19px; }
   .panel-header { padding: 20px 18px 16px; }
   .scene-note { padding: 16px 18px; }
   .script-line { grid-template-columns: 30px 1fr; }
