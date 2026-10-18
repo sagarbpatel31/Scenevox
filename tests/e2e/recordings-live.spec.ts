@@ -118,6 +118,17 @@ test("@live exact greetings produce recorded audio, two voices, replay and WAV e
     "alba",
     "george",
   ]);
+  // The exported WAV is ready before the document's 300 ms autosave debounce.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("scenevox.scene.v2")!).takes.filter(
+            (take: { audio?: unknown }) => take.audio,
+          ).length,
+      ),
+    )
+    .toBe(6);
   const sceneDuration = await page.evaluate(() => {
     const scene = JSON.parse(localStorage.getItem("scenevox.scene.v2")!);
     return (
