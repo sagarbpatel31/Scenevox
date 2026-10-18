@@ -11,6 +11,7 @@ import {
 type Props = {
   context: DirectorLineContext;
   enabled: boolean;
+  paused?: boolean;
   playing: boolean;
   onStart: () => void;
   onRevision: (revision: DirectorRevision, lineId: string) => void;
@@ -29,6 +30,7 @@ const labels: Record<DirectorState, string> = {
 export function DirectorBooth({
   context,
   enabled,
+  paused = false,
   playing,
   onStart,
   onRevision,
@@ -58,6 +60,7 @@ export function DirectorBooth({
   useEffect(() => () => session.current?.dispose(), []);
 
   const start = async (microphone: boolean, typedRequest = "") => {
+    if (paused) return;
     onStart();
     session.current?.dispose();
     setError("");
@@ -92,7 +95,7 @@ export function DirectorBooth({
   const send = (event: FormEvent) => {
     event.preventDefault();
     const text = request.trim();
-    if (!text || !enabled) return;
+    if (!text || !enabled || paused) return;
     setRequest("");
     if (!active) void start(false, text);
     else if (!session.current?.requestDirection(text))
@@ -152,13 +155,16 @@ export function DirectorBooth({
           maxLength={500}
           onChange={(event) => setRequest(event.target.value)}
           placeholder="Or type a direction…"
-          disabled={!enabled || state === "connecting" || state === "ending"}
+          disabled={
+            !enabled || paused || state === "connecting" || state === "ending"
+          }
         />
         <button
           type="submit"
           aria-label="Send direction"
           disabled={
             !enabled ||
+            paused ||
             !request.trim() ||
             ["connecting", "ending", "thinking", "speaking"].includes(state)
           }
@@ -186,7 +192,7 @@ export function DirectorBooth({
             type="button"
             className="director-button"
             onClick={() => void start(true)}
-            disabled={!enabled}
+            disabled={!enabled || paused}
           >
             ◉ Talk to Director
           </button>
@@ -206,6 +212,11 @@ export function DirectorBooth({
       {!enabled ? (
         <p className="director-intro">
           Live direction is available when AssemblyAI is configured.
+        </p>
+      ) : null}
+      {paused ? (
+        <p className="director-intro" role="status">
+          Director paused while audio is rendering.
         </p>
       ) : null}
     </section>

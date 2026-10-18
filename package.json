@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "node --test tests/audio-worklet.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
     "test:live": "SCENEVOX_LIVE_TESTS=1 playwright test --grep @live"
   },

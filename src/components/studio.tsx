@@ -14,6 +14,8 @@ import {
   decodeSharedScene,
   encodeSharedScene,
   makeTake,
+  LEGACY_SCENE_STORAGE_KEY,
+  portableScene,
   SCENE_STORAGE_KEY,
   screenplayText,
   validateScene,
@@ -26,6 +28,8 @@ import type { DirectorRevision } from "@/lib/voice-agent/director-session";
 import { DirectorBooth } from "./director-booth";
 import { ImportDialog } from "./import-dialog";
 import { TakeComparison } from "./take-comparison";
+import { RecordedTakes } from "./recorded-takes";
+import type { AssemblyVoice, AudioAsset } from "@/lib/audio/types";
 
 type History = {
   scene: SceneDocument;
@@ -79,19 +83,19 @@ function downloadFile(contents: string, filename: string, mime: string) {
 
 const tourSteps = [
   {
-    title: "A scene, ready for its first read.",
-    body: "Choose a line to edit. Import your own script to create a cast automatically, or explore this sample.",
-    target: "script",
+    title: "Hear the original.",
+    body: "Choose a line and an AssemblyAI voice in Cast. Generate a take in Recorded performances: exact script wording, no microphone needed.",
+    target: "recordings",
   },
   {
     title: "Speak the change you want.",
-    body: "Open the Director’s booth. Try: “Shorten this line, with fear beneath the smile.” AssemblyAI listens, revises the line, and speaks its response.",
+    body: "Ask the Director to shorten the selected line. Generate the revised take, then switch between Play A and Play B to hear the difference.",
     target: "direction",
   },
   {
-    title: "Keep the take that tells the story.",
-    body: "Open Takes to audition and restore versions. Your scene saves automatically; share a snapshot or export the script.",
-    target: "direction",
+    title: "Take the performance with you.",
+    body: "Use your preferred recording. Render scene reuses matching clips, adds 300 ms gaps, and exports a mono 24 kHz WAV. Recordings stay on this device; shared links carry text only.",
+    target: "recordings",
   },
 ] as const;
 
@@ -111,6 +115,52 @@ export function Studio() {
   const [statusText, setStatusText] = useState("Ready for your first read");
   const [engineReady, setEngineReady] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [assemblyVoices, setAssemblyVoices] = useState<AssemblyVoice[]>([]);
+  const [catalogMessage, setCatalogMessage] = useState(
+    "Loading AssemblyAI voices…",
+  );
+  const [rendering, setRendering] = useState(false);
+  const [recordedPlaying, setRecordedPlaying] = useState(false);
+  const audioStop = useRef(() => {});
+  const registerAudioStop = useCallback((stop: () => void) => {
+    audioStop.current = stop;
+  }, []);
+  const onRecordedPlayback = useCallback(
+    (active: boolean, lineId: string | null) => {
+      setRecordedPlaying(active);
+      setActiveLineId(lineId);
+    },
+    [],
+  );
+  const assemblyAssignments = useMemo(
+    () =>
+      Object.fromEntries(
+        characters.map((character, index) => [
+          character.id,
+          scene.assemblyVoiceAssignments[character.id] ??
+            assemblyVoices[index % assemblyVoices.length]?.id ??
+            "",
+        ]),
+      ),
+    [characters, scene.assemblyVoiceAssignments, assemblyVoices],
+  );
+  const refreshCatalog = useCallback(async () => {
+    setCatalogMessage("Loading AssemblyAI voices…");
+    try {
+      const response = await fetch("/api/voice-agent/voices");
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data.voices))
+        throw new Error(data.error || "Could not load AssemblyAI voices.");
+      setAssemblyVoices(data.voices);
+      setCatalogMessage(data.warning || "Live AssemblyAI voice catalog");
+    } catch (error) {
+      setCatalogMessage(
+        error instanceof Error
+          ? error.message
+          : "Voice catalog unavailable. Retry.",
+      );
+    }
+  }, []);
   const [showImport, setShowImport] = useState(false);
   const [editorTab, setEditorTab] = useState<"direction" | "takes">(
     "direction",
@@ -142,6 +192,15 @@ export function Studio() {
   );
   const duration = Math.max(1, Math.round(wordCount / (2.45 * speed)));
   const activeTour = tourStep === null ? null : tourSteps[tourStep];
+  useEffect(() => {
+    if (tourStep === null) return;
+    const target = tourSteps[tourStep].target;
+    document
+      .getElementById(
+        target === "recordings" ? "recordings" : "direction-panel",
+      )
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [tourStep]);
   const directorContext = useMemo(
     () => ({
       lineId: selectedLine.id,
@@ -180,7 +239,9 @@ export function Studio() {
       }
       if (!restoredShared) {
         try {
-          const stored = localStorage.getItem(SCENE_STORAGE_KEY);
+          const stored =
+            localStorage.getItem(SCENE_STORAGE_KEY) ??
+            localStorage.getItem(LEGACY_SCENE_STORAGE_KEY);
           if (stored)
             dispatch({
               type: "load",
@@ -200,16 +261,27 @@ export function Studio() {
   }, []);
 
   useEffect(() => {
+    const timer = setTimeout(() => void refreshCatalog(), 0);
+    return () => clearTimeout(timer);
+  }, [refreshCatalog]);
+
+  useEffect(() => {
     if (!loaded) return;
-    const timer = setTimeout(() => {
+    const persist = () => {
       try {
         localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(scene));
         setSaveState("Saved on this device");
       } catch {
         setSaveState("Could not save · export to keep a copy");
       }
-    }, 300);
-    return () => clearTimeout(timer);
+    };
+    const timer = setTimeout(persist, 300);
+    // Flush the latest document on refresh/navigation, before the debounce fires.
+    window.addEventListener("pagehide", persist);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", persist);
+    };
   }, [scene, loaded]);
 
   useEffect(() => {
@@ -257,6 +329,8 @@ export function Studio() {
     }));
 
   const playLines = async (readLines: ScriptLine[]) => {
+    if (rendering) return;
+    audioStop.current();
     stopPlayback();
     const generation = playbackGeneration.current;
     setPlaying(true);
@@ -331,6 +405,7 @@ export function Studio() {
   );
 
   const loadScene = (next: SceneDocument) => {
+    audioStop.current();
     stopPlayback();
     dispatch({ type: "edit", update: () => next });
     setSelectedLineId(next.lines[0].id);
@@ -357,6 +432,50 @@ export function Studio() {
     }
   };
   const slug = scene.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "scene";
+  const saveRecording = (snapshot: ScriptLine, asset: AudioAsset) => {
+    edit((current) => {
+      if (!current.lines.some((item) => item.id === snapshot.id))
+        return current;
+      const existing = [...current.takes]
+        .reverse()
+        .find(
+          (take) =>
+            take.lineId === snapshot.id &&
+            take.text === snapshot.text &&
+            (!take.audio || take.audio.assetId === asset.id),
+        );
+      return {
+        ...current,
+        takes: existing
+          ? current.takes.map((take) =>
+              take.id === existing.id
+                ? { ...take, audio: asset.metadata }
+                : take,
+            )
+          : [
+              ...current.takes,
+              { ...makeTake(snapshot, "Saved take"), audio: asset.metadata },
+            ],
+      };
+    });
+  };
+  const restoreRecording = (take: SceneTake) => {
+    edit((current) => ({
+      ...current,
+      lines: current.lines.map((item) =>
+        item.id === take.lineId
+          ? { ...item, text: take.text, direction: take.direction }
+          : item,
+      ),
+      assemblyVoiceAssignments: take.audio
+        ? {
+            ...current.assemblyVoiceAssignments,
+            [selectedLine.characterId]: take.audio.voice,
+          }
+        : current.assemblyVoiceAssignments,
+    }));
+    setStatusText("Recorded take selected · matching audio will be reused");
+  };
 
   return (
     <main className="app-shell">
@@ -431,9 +550,13 @@ export function Studio() {
             type="button"
             className="toolbar-button"
             onClick={() => setShowImport(true)}
+            disabled={rendering}
           >
             ＋ Import script
           </button>
+          <a className="toolbar-button recording-link" href="#recordings">
+            Record &amp; compare ↓
+          </a>
           <details className="export-menu">
             <summary>Export ↓</summary>
             <div>
@@ -453,7 +576,7 @@ export function Studio() {
                 type="button"
                 onClick={() =>
                   downloadFile(
-                    JSON.stringify(scene, null, 2),
+                    JSON.stringify(portableScene(scene), null, 2),
                     slug + ".scenevox.json",
                     "application/json",
                   )
@@ -469,7 +592,7 @@ export function Studio() {
             className="toolbar-button subtle"
             type="button"
             onClick={() => dispatch({ type: "undo" })}
-            disabled={!history.past.length}
+            disabled={rendering || !history.past.length}
             aria-label="Undo scene edit"
           >
             ↶ Undo
@@ -478,7 +601,7 @@ export function Studio() {
             className="toolbar-button subtle"
             type="button"
             onClick={() => dispatch({ type: "redo" })}
-            disabled={!history.future.length}
+            disabled={rendering || !history.future.length}
             aria-label="Redo scene edit"
           >
             ↷ Redo
@@ -488,6 +611,7 @@ export function Studio() {
             type="button"
             className="toolbar-button subtle"
             onClick={() => loadScene(createDemoScene())}
+            disabled={rendering}
           >
             Load demo
           </button>
@@ -495,12 +619,7 @@ export function Studio() {
       </nav>
 
       <section className="studio" id="studio">
-        <div
-          className={
-            "panel script-panel " +
-            (activeTour?.target === "script" ? "tour-target" : "")
-          }
-        >
+        <div className="panel script-panel">
           <div className="panel-header">
             <div>
               <p className="kicker">Your scene</p>
@@ -608,8 +727,14 @@ export function Studio() {
             <span className="meta-chip">{characters.length} roles</span>
           </div>
           <p className="cast-caption">
-            Device voices for script rehearsal. The live Director speaks with
-            AssemblyAI.
+            AssemblyAI voices make downloadable recordings. Device voices are
+            quick, unsaved previews.
+          </p>
+          <p className="catalog-status">
+            {catalogMessage}{" "}
+            <button onClick={() => void refreshCatalog()} disabled={rendering}>
+              Retry voices
+            </button>
           </p>
           <div className="cast-list">
             {characters.map((character) => (
@@ -627,6 +752,40 @@ export function Studio() {
                 <div className="cast-copy">
                   <strong>{character.name}</strong>
                   <span>{character.role}</span>
+                  <label>
+                    <span>AssemblyAI voice</span>
+                    <select
+                      aria-label={`AssemblyAI voice for ${character.name}`}
+                      disabled={rendering || !assemblyVoices.length}
+                      value={assemblyAssignments[character.id] ?? ""}
+                      onChange={(event) =>
+                        edit((current) => ({
+                          ...current,
+                          assemblyVoiceAssignments: {
+                            ...current.assemblyVoiceAssignments,
+                            [character.id]: event.target.value,
+                          },
+                        }))
+                      }
+                    >
+                      {!assemblyVoices.length ? (
+                        <option value="">Catalog unavailable</option>
+                      ) : null}
+                      {assemblyAssignments[character.id] &&
+                      !assemblyVoices.some(
+                        (item) => item.id === assemblyAssignments[character.id],
+                      ) ? (
+                        <option value={assemblyAssignments[character.id]}>
+                          {assemblyAssignments[character.id]} (saved voice)
+                        </option>
+                      ) : null}
+                      {assemblyVoices.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label>
                     <span className="sr-only">Voice for {character.name}</span>
                     <select
@@ -679,6 +838,7 @@ export function Studio() {
         </aside>
 
         <aside
+          id="direction-panel"
           className={
             "panel direction-panel " +
             (activeTour?.target === "direction" ? "tour-target" : "")
@@ -693,6 +853,7 @@ export function Studio() {
               className="icon-button"
               type="button"
               onClick={() => void playLines([selectedLine])}
+              disabled={rendering}
               aria-label="Preview selected line"
             >
               ▷
@@ -702,8 +863,12 @@ export function Studio() {
             key={scene.characters.map((character) => character.id).join("-")}
             context={directorContext}
             enabled={engineReady}
-            playing={playing}
-            onStart={stopPlayback}
+            paused={rendering}
+            playing={playing || recordedPlaying || rendering}
+            onStart={() => {
+              audioStop.current();
+              stopPlayback();
+            }}
             onRevision={applyRevision}
           />
           <div className="editor-tabs" role="tablist" aria-label="Line editor">
@@ -911,6 +1076,18 @@ export function Studio() {
             {playing ? "■ Stop" : "▷ Play scene"}
           </button>
         </div>
+        <RecordedTakes
+          scene={scene}
+          line={selectedLine}
+          voiceAssignments={assemblyAssignments}
+          enabled={engineReady}
+          onTake={saveRecording}
+          onRestore={restoreRecording}
+          onBusy={setRendering}
+          onStart={stopPlayback}
+          registerStop={registerAudioStop}
+          onPlayback={onRecordedPlayback}
+        />
       </section>
 
       {showImport ? (
@@ -965,7 +1142,7 @@ export function Studio() {
       <footer>
         <span>SceneVox · A rehearsal room for the stories worth telling.</span>
         <span>
-          Live Director by AssemblyAI · Scene playback uses device voices.
+          AssemblyAI Director + recorded takes · Device preview stays separate.
         </span>
       </footer>
     </main>

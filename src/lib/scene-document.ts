@@ -4,6 +4,7 @@ import {
   type Character,
   type ScriptLine,
 } from "./studio-data";
+import type { AudioMetadata } from "./audio/types";
 
 export type SceneTake = {
   id: string;
@@ -12,10 +13,11 @@ export type SceneTake = {
   direction: string;
   source: "Original" | "Saved take" | "Director";
   createdAt: string;
+  audio?: AudioMetadata;
 };
 
 export type SceneDocument = {
-  version: 1;
+  version: 2;
   title: string;
   setting: string;
   premise: string;
@@ -23,9 +25,11 @@ export type SceneDocument = {
   lines: ScriptLine[];
   takes: SceneTake[];
   voiceAssignments: Record<string, string>;
+  assemblyVoiceAssignments: Record<string, string>;
 };
 
-export const SCENE_STORAGE_KEY = "scenevox.scene.v1";
+export const SCENE_STORAGE_KEY = "scenevox.scene.v2";
+export const LEGACY_SCENE_STORAGE_KEY = "scenevox.scene.v1";
 const colors = [
   "#ff8d6b",
   "#b6ef5b",
@@ -51,7 +55,7 @@ export function makeTake(
 
 export function createDemoScene(): SceneDocument {
   return {
-    version: 1,
+    version: 2,
     title: "The Last Garden",
     setting: "INT. ORBITAL SEED VAULT — ARTIFICIAL DAWN",
     premise: "A failing ship gives its garden one last sunrise.",
@@ -66,6 +70,7 @@ export function createDemoScene(): SceneDocument {
       createdAt: "2026-10-17T00:00:00Z",
     })),
     voiceAssignments: {},
+    assemblyVoiceAssignments: {},
   };
 }
 
@@ -145,7 +150,7 @@ export function parseScript(script: string, title: string): SceneDocument {
   if (lines.length > 100 || lines.some((line) => line.text.length > 1_000))
     throw new Error("Use up to 100 lines, with at most 1,000 characters each.");
   return {
-    version: 1,
+    version: 2,
     title: title.trim().slice(0, 80) || "Untitled scene",
     setting: "YOUR SCENE · YOUR VOICES",
     premise: "A new story, ready for its first read.",
@@ -153,15 +158,16 @@ export function parseScript(script: string, title: string): SceneDocument {
     lines,
     takes: lines.map((line) => makeTake(line, "Original")),
     voiceAssignments: {},
+    assemblyVoiceAssignments: {},
   };
 }
 
 export function validateScene(value: unknown): SceneDocument {
   if (!value || typeof value !== "object")
     throw new Error("Invalid scene file.");
-  const scene = value as SceneDocument;
+  const scene = value as Omit<SceneDocument, "version"> & { version: number };
   if (
-    scene.version !== 1 ||
+    ![1, 2].includes(scene.version) ||
     typeof scene.title !== "string" ||
     scene.title.length > 80 ||
     typeof scene.setting !== "string" ||
@@ -224,12 +230,79 @@ export function validateScene(value: unknown): SceneDocument {
       if (typeof scene.voiceAssignments[id] === "string")
         assignments[id] = scene.voiceAssignments[id];
   }
-  return { ...scene, takes, voiceAssignments: assignments };
+  const assemblyVoiceAssignments: Record<string, string> = {};
+  for (const id of ids) {
+    const voice = scene.assemblyVoiceAssignments?.[id];
+    if (typeof voice === "string" && /^[a-zA-Z0-9_-]{1,120}$/.test(voice))
+      assemblyVoiceAssignments[id] = voice;
+  }
+  const safeTakes = takes.map(({ audio, ...take }) => ({
+    ...take,
+    ...(validAudio(audio) ? { audio } : {}),
+  }));
+  // Return only known fields; imports cannot inject additional persisted data.
+  return {
+    version: 2,
+    title: scene.title,
+    setting: scene.setting,
+    premise: scene.premise,
+    characters: scene.characters,
+    lines: scene.lines,
+    takes: safeTakes,
+    voiceAssignments: assignments,
+    assemblyVoiceAssignments,
+  };
+}
+
+function validAudio(audio: AudioMetadata | undefined): audio is AudioMetadata {
+  return (
+    !!audio &&
+    /^[a-f0-9]{64}$/.test(audio.assetId) &&
+    audio.fingerprint === audio.assetId &&
+    typeof audio.voice === "string" &&
+    audio.voice.length <= 120 &&
+    Number.isFinite(audio.duration) &&
+    audio.duration > 0 &&
+    audio.duration <= 60 &&
+    typeof audio.transcript === "string" &&
+    audio.transcript.length <= 10_000 &&
+    Number.isFinite(audio.firstAudioMs) &&
+    Number.isFinite(audio.sessionMs) &&
+    typeof audio.sessionId === "string" &&
+    typeof audio.endedCleanly === "boolean" &&
+    Array.isArray(audio.timings) &&
+    audio.timings.length <= 2000 &&
+    audio.timings.every(
+      (word) =>
+        word &&
+        typeof word.text === "string" &&
+        Number.isFinite(word.startMs) &&
+        Number.isFinite(word.endMs) &&
+        word.startMs >= 0 &&
+        word.endMs >= word.startMs &&
+        word.endMs <= audio.duration * 1000 + 1000,
+    )
+  );
+}
+
+export function portableScene(scene: SceneDocument) {
+  return {
+    ...scene,
+    takes: scene.takes.map(({ audio: _audio, ...take }) => {
+      void _audio;
+      return take;
+    }),
+    voiceAssignments: {},
+  };
 }
 
 export function encodeSharedScene(scene: SceneDocument) {
   const bytes = new TextEncoder().encode(
-    JSON.stringify({ ...scene, takes: [], voiceAssignments: {} }),
+    JSON.stringify({
+      ...portableScene(scene),
+      takes: [],
+      assemblyVoiceAssignments: {},
+    }),
   );
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

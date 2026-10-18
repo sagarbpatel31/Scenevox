@@ -2,7 +2,30 @@ import { expect, test, type Page } from "@playwright/test";
 
 const browserErrors = new WeakMap<Page, string[]>();
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
+  if (!testInfo.title.includes("@live")) {
+    await page.route("**/api/health", (route) =>
+      route.fulfill({ json: { provider: "assemblyai-ready" } }),
+    );
+    await page.route("**/api/voice-agent/voices", (route) =>
+      route.fulfill({
+        json: {
+          voices: [
+            { id: "alba", name: "Alba" },
+            { id: "george", name: "George" },
+          ],
+          source: "simulated",
+        },
+      }),
+    );
+    // An unexpected paid-session request must fail locally, never hit the provider.
+    await page.route("**/api/voice-agent/token", (route) =>
+      route.fulfill({
+        status: 503,
+        json: { error: "Paid API disabled in regression tests" },
+      }),
+    );
+  }
   const errors: string[] = [];
   browserErrors.set(page, errors);
   page.on("pageerror", (error) => errors.push(error.message));
@@ -61,7 +84,7 @@ test("a malformed share link does not overwrite the saved scene", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          JSON.parse(localStorage.getItem("scenevox.scene.v1")!).lines[0].text,
+          JSON.parse(localStorage.getItem("scenevox.scene.v2")!).lines[0].text,
       ),
     )
     .toBe("Keep this draft safe.");
@@ -84,7 +107,7 @@ test("edits survive refresh, and undo/redo restores the document", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          JSON.parse(localStorage.getItem("scenevox.scene.v1")!).lines[0].text,
+          JSON.parse(localStorage.getItem("scenevox.scene.v2")!).lines[0].text,
       ),
     )
     .toBe("We still have tomorrow.");

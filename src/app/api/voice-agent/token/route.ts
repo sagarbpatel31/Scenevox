@@ -4,6 +4,26 @@ const MAX_SESSION_DURATION_SECONDS = 300;
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  let purpose = "director";
+  try {
+    const raw = await request.text();
+    if (raw) {
+      const body = JSON.parse(raw);
+      if (
+        !body ||
+        typeof body !== "object" ||
+        !["render", "director"].includes(body.purpose)
+      )
+        throw new Error();
+      purpose = body.purpose;
+    }
+  } catch {
+    return Response.json(
+      { error: "Use purpose render or director." },
+      { status: 400 },
+    );
+  }
+  const maxDuration = purpose === "render" ? 60 : MAX_SESSION_DURATION_SECONDS;
   const apiKey = process.env.ASSEMBLYAI_API_KEY;
   if (!apiKey) {
     return Response.json(
@@ -34,7 +54,7 @@ export async function POST(request: Request) {
   tokenUrl.searchParams.set("expires_in_seconds", String(TOKEN_TTL_SECONDS));
   tokenUrl.searchParams.set(
     "max_session_duration_seconds",
-    String(MAX_SESSION_DURATION_SECONDS),
+    String(maxDuration),
   );
 
   let response: Response;
@@ -58,8 +78,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const payload = (await response.json()) as { token?: string };
-  if (!payload.token) {
+  let payload: { token?: string };
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  if (typeof payload?.token !== "string" || !payload.token) {
     return Response.json(
       { error: "AssemblyAI returned an invalid token response." },
       { status: 502 },
@@ -70,7 +95,7 @@ export async function POST(request: Request) {
     {
       token: payload.token,
       expiresInSeconds: TOKEN_TTL_SECONDS,
-      maxSessionDurationSeconds: MAX_SESSION_DURATION_SECONDS,
+      maxSessionDurationSeconds: maxDuration,
     },
     { headers: { "Cache-Control": "no-store" } },
   );
