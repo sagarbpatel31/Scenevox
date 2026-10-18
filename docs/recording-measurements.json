@@ -1,0 +1,13 @@
+{
+  "testedCommit": "51730ead6469c2d9006c3a52c524d525f43a9fd5",
+  "localDate": "2026-10-17 PDT",
+  "utcDate": "2026-10-18",
+  "ci": { "conclusion": "success", "url": "https://github.com/sagarbpatel31/Scenevox/actions/runs/39104174426", "platform": "Ubuntu / Node 24 / Playwright Chromium", "paidApiAccess": false },
+  "environment": { "platform": "macOS", "node": "22.19.0", "browser": "Chrome 155.0.8059.80", "server": "Next.js 16.4.2 production localhost:3101", "provider": "real AssemblyAI Voice Agent API", "microphone": false },
+  "samples": [
+    { "text": "Mara, meet Zoë at 9:42. Café déjà vu?", "voice": "alba", "transcriptExactMatch": true, "durationSeconds": 4.28, "firstAudioMs": 1737.7, "providerSessionMs": 6044.59, "requestTotalMs": 6985.9, "wordTimingCount": 8, "endedCleanly": true },
+    { "text": "Orion—keep all 42 seedlings safe!", "voice": "george", "transcriptExactMatch": true, "durationSeconds": 3.12, "firstAudioMs": 2105.7, "providerSessionMs": 4345.164, "requestTotalMs": 5482, "wordTimingCount": 5, "endedCleanly": true },
+    { "text": "Don’t leave, Élodie. We have tomorrow.", "voice": "alba", "transcriptExactMatch": true, "durationSeconds": 3.65, "firstAudioMs": 2192.2, "providerSessionMs": 4626.753, "requestTotalMs": 6011, "wordTimingCount": 6, "endedCleanly": true }
+  ],
+  "caveat": "Three observed samples, not a latency guarantee. Human listening and physical microphone acceptance remain pending."
+}

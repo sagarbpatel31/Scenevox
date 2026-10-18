@@ -49,3 +49,14 @@
 - Verified the real browser audio pipeline with synthetic speech through AssemblyAI. The requested line was revised, returned audio frames arrived, takes updated, and `session.ended` was received after 17.4 seconds of test runtime.
 - Verified typed direction revised two different selected lines in one real session in 7.3 seconds of test runtime.
 - Used the verification and React quality guidance to check browser exceptions, cancellation, storage, accessibility labels, and mobile layout.
+
+## 2026-10-17 — recorded takes and verifiable demo
+
+- Added microphone-free exact reads using the Voice Agent greeting, streamed PCM capture, provider transcript/timings and measured latency/session duration.
+- Added separate AssemblyAI character voices; the live catalog endpoint currently returns HTTP 426, so the official documented fallback is explicitly labeled and retryable. Alba and George were verified with real renders.
+- Added version-2 scenes with v1 migration, IndexedDB WAV assets, a 50 MB no-eviction cap, explicit deletion and immediate download after quota failure.
+- Added A/B replay, sample-derived waveforms, timestamped word highlighting, stale-audio detection, text/voice caching, and mono 24 kHz PCM16 scene export with 300 ms gaps.
+- Added 60-second render-purpose tokens while retaining the five-minute Director cap; rendering pauses the Director and supports clean cancellation.
+- Verified 18 production browser regressions, 10 audio/schema/route tests, and all three opt-in real API tests. Production lint, TypeScript and build pass; browser bundles do not contain the configured key.
+- Fixed a rapid-refresh autosave race discovered in production testing. Updated the judge tour, runbook, CI workflow, measurements and manual acceptance checklist.
+- Physical microphone and human listening remain explicitly pending. No public deployment or hosted audio was added.
