@@ -382,16 +382,39 @@ test("50 MB storage cap preserves existing assets and leaves the new clip downlo
 
 test("legacy draft migrates to v2, retaining v1 backup", async ({ page }) => {
   await simulatedProvider(page);
-  await ready(page);
-  await page.evaluate(() => {
-    const scene = JSON.parse(localStorage.getItem("scenevox.scene.v2")!);
-    scene.version = 1;
-    scene.lines[0].text = "A legacy draft.";
-    delete scene.assemblyVoiceAssignments;
-    localStorage.setItem("scenevox.scene.v1", JSON.stringify(scene));
+  // Seed before application startup; a running v2 app correctly flushes its draft on pagehide.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "scenevox.scene.v1",
+      JSON.stringify({
+        version: 1,
+        title: "Legacy scene",
+        setting: "INT. GARDEN",
+        premise: "Keep the draft.",
+        characters: [
+          {
+            id: "mara",
+            name: "Mara",
+            role: "Writer",
+            color: "#ff8d6b",
+            voiceHint: "warm",
+          },
+        ],
+        lines: [
+          {
+            id: "line-1",
+            characterId: "mara",
+            text: "A legacy draft.",
+            direction: "quiet",
+          },
+        ],
+        takes: [],
+        voiceAssignments: {},
+      }),
+    );
     localStorage.removeItem("scenevox.scene.v2");
   });
-  await page.reload();
+  await ready(page);
   await expect(page.getByLabel("Dialogue", { exact: true })).toHaveValue(
     "A legacy draft.",
   );
