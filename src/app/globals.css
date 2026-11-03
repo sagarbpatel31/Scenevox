@@ -354,6 +354,22 @@ footer { max-width: 1440px; margin: 0 auto; padding: 2px 30px 28px; display: fle
 /* Recorded performances: real sample peaks, accessible controls and local media. */
 .recording-panel { grid-column: 1 / -1; padding: 28px; min-width: 0; }
 .recording-link { text-decoration: none; }
+.dialogue-length { margin: 8px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
+.dialogue-length button { border: 1px solid var(--line); border-radius: 7px; padding: 7px; color: var(--violet); background: white; cursor: pointer; }
+.split-error { margin: 10px 20px; color: #8f3022; font-size: 12px; }
+.scene-mix-player { margin: 20px 0; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: #f0eee5; }
+.scene-player-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.scene-player-heading h3 { margin: 5px 0 16px; font-size: 20px; }
+.scene-player-heading output { font-variant-numeric: tabular-nums; color: var(--muted); }
+.scene-transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.scene-seek { display: grid; flex: 1; min-width: 180px; gap: 6px; font-size: 11px; }
+.scene-seek input { width: 100%; accent-color: var(--violet); }
+.scene-timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 10px; }
+.recording-panel .scene-timeline button { display: grid; gap: 7px; text-align: left; color: var(--ink); background: white; border-color: var(--line); }
+.scene-timeline button[aria-current="true"] { outline: 2px solid var(--violet); }
+.scene-timeline span { font: 14px/1.5 Georgia, serif; overflow-wrap: anywhere; }
+.scene-timeline strong, .scene-timeline small { font-size: 11px; }
+.scene-caption { padding: 12px; border-radius: 8px; background: white; font-family: Georgia, serif; overflow-wrap: anywhere; }
 .catalog-status { padding: 0 18px; line-height: 1.6; }
 .recorded-wave small { color: #c0cbb9; }
 .recording-heading { display: flex; gap: 20px; justify-content: space-between; align-items: center; }

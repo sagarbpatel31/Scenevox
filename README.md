@@ -17,6 +17,8 @@ Built for AssemblyAI’s **Voice hackathon week: Hack into speech**.
 - Guided judge tour: hear the original → revise → A/B → download
 - Real AssemblyAI exact-script recordings with separate character voice selectors
 - Replay, measured waveform, provider word timings, and A/B switching without overlapping clips
+- Assembled-scene review with play/pause/resume, keyboard-accessible seeking, timestamped line jumps and synchronized captions
+- Safe long-dialogue splitting: preserves every character, speaker, direction and undo history; refuses to cut an oversized word
 - Per-take and full-scene mono 24 kHz / 16-bit PCM WAV export, with 300 ms gaps between lines
 - Sequential scene rendering, cached by exact text and voice, with cancellation and recoverable errors
 - IndexedDB recording storage (50 MB cap), explicit deletion, and immediate download if saving fails
@@ -35,11 +37,13 @@ The Director and recorded performances use AssemblyAI’s documented Voice Agent
 2. Choose AssemblyAI voices in **Cast**, then **Generate take** in **Recorded performances**. Play A to hear the original.
 3. Ask the Director to shorten the line. Speak or type: “Shorten this line, with fear beneath the smile.” Watch the revision apply.
 4. Generate the revision. Switch **Play A / Play B**, replay, and **Use recorded take** to select the wording and voice you prefer.
-5. **Render scene** generates only missing clips. **Download scene WAV** exports the chosen lines with 300 ms gaps. Download individual WAVs as well.
+5. **Render scene** generates only missing clips. Review the assembled recording with **Play recorded scene**, pause/resume, the seek slider, or a timestamped line button. **Download scene WAV** exports the same reviewed audio with 300 ms gaps. Download individual WAVs as well.
 
 **60s judge tour** introduces this flow in the app. Director context follows line selection during a live session.
 
-Script import accepts `NAME: (direction) Dialogue` or uppercase screenplay character cues. Keep each rendered line at 1–500 characters; longer lines stay editable and must be split before rendering. Each render session is capped at 60 seconds, one at a time; the Director pauses during rendering.
+Script import accepts `NAME: (direction) Dialogue` or uppercase screenplay character cues. Keep each rendered line at 1–500 characters. Longer lines stay editable: use **Split into renderable lines** to split at word/sentence boundaries without losing any text. The original remains a saved take and the split is one undoable edit. If a single word exceeds the limit, add a suitable break yourself; it is never silently cut. Each render session is capped at 60 seconds, one at a time; the Director pauses during rendering.
+
+Changing scene text or voices stops an old mix and blocks its playback/export until rerendered. Individual take playback, the full mix, the Director and device previews share exclusive playback ownership. Recorded default voice choices are saved so a reordered catalog cannot silently change the next take. A scene mix is rebuilt on request from local clips; the combined WAV is not an additional persistent database asset.
 
 Export `.txt` for a screenplay or `.json` for text, cast, voice choices, and text takes. JSON and share URLs never contain audio blobs or device asset references. After import or storage loss, regenerate recordings. Browser storage can be cleared by the browser; WAV downloads are your durable backup. Deleting audio preserves text takes and does not silently evict other recordings.
 

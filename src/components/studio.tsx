@@ -30,6 +30,7 @@ import { ImportDialog } from "./import-dialog";
 import { TakeComparison } from "./take-comparison";
 import { RecordedTakes } from "./recorded-takes";
 import type { AssemblyVoice, AudioAsset } from "@/lib/audio/types";
+import { splitDialogue } from "@/lib/split-dialogue";
 
 type History = {
   scene: SceneDocument;
@@ -167,6 +168,10 @@ export function Studio() {
   );
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [speed, setSpeed] = useState(1);
+  const [splitError, setSplitError] = useState<{
+    lineId: string;
+    message: string;
+  } | null>(null);
   const activePlayback = useRef<TtsPlayback | null>(null);
   const playbackGeneration = useRef(0);
   const stopPlayback = useCallback(() => {
@@ -446,6 +451,12 @@ export function Studio() {
         );
       return {
         ...current,
+        assemblyVoiceAssignments: {
+          ...current.assemblyVoiceAssignments,
+          [snapshot.characterId]:
+            current.assemblyVoiceAssignments[snapshot.characterId] ??
+            asset.metadata.voice,
+        },
         takes: existing
           ? current.takes.map((take) =>
               take.id === existing.id
@@ -475,6 +486,44 @@ export function Studio() {
         : current.assemblyVoiceAssignments,
     }));
     setStatusText("Recorded take selected · matching audio will be reused");
+  };
+  const splitSelectedLine = () => {
+    setSplitError(null);
+    try {
+      const parts = splitDialogue(selectedLine.text);
+      if (parts.length < 2) return;
+      if (lines.length + parts.length - 1 > 100)
+        throw new Error(
+          "Splitting would exceed 100 lines. Remove unused lines first.",
+        );
+      audioStop.current();
+      stopPlayback();
+      const splitLines = parts.map((text, index) => ({
+        ...selectedLine,
+        id: index === 0 ? selectedLine.id : crypto.randomUUID(),
+        text,
+      }));
+      edit((current) => ({
+        ...current,
+        lines: current.lines.flatMap((item) =>
+          item.id === selectedLine.id ? splitLines : [item],
+        ),
+        takes: [
+          ...current.takes,
+          makeTake(selectedLine, "Saved take"),
+          ...splitLines.map((item) => makeTake(item, "Saved take")),
+        ],
+      }));
+      setStatusText(
+        `Split into ${parts.length} renderable lines. Every character was preserved; undo is available.`,
+      );
+    } catch (error) {
+      setSplitError({
+        lineId: selectedLine.id,
+        message:
+          error instanceof Error ? error.message : "Could not split this line.",
+      });
+    }
   };
 
   return (
@@ -907,8 +956,30 @@ export function Studio() {
                 value={selectedLine.text}
                 maxLength={1_000}
                 rows={4}
-                onChange={(event) => updateLine({ text: event.target.value })}
+                onChange={(event) => {
+                  setSplitError(null);
+                  updateLine({ text: event.target.value });
+                }}
               />
+              <div className="dialogue-length">
+                <span>
+                  {Array.from(selectedLine.text).length} / 500 render characters
+                </span>
+                {Array.from(selectedLine.text).length > 500 ? (
+                  <button
+                    disabled={rendering}
+                    type="button"
+                    onClick={splitSelectedLine}
+                  >
+                    Split into renderable lines
+                  </button>
+                ) : null}
+              </div>
+              {splitError?.lineId === selectedLine.id ? (
+                <p className="split-error" role="alert">
+                  {splitError.message}
+                </p>
+              ) : null}
               <label className="field-label" htmlFor="line-direction">
                 Performance direction
               </label>

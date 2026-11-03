@@ -131,6 +131,297 @@ async function downloadedBytes(
   for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
 }
+
+test("assembled scene supports play, pause, resume, seeking and line jumps", async ({
+  page,
+}, testInfo) => {
+  const { requests } = await simulatedProvider(page);
+  await ready(page);
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(page.getByTestId("render-status")).toContainText("Scene ready");
+  const player = page.getByRole("region", { name: "Assembled scene player" });
+  await player.screenshot({ path: testInfo.outputPath("scene-review.png") });
+  const media = () =>
+    page.getByTestId("scene-audio").evaluate((audio: HTMLAudioElement) => ({
+      paused: audio.paused,
+      time: audio.currentTime,
+      duration: audio.duration,
+    }));
+  await player
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await expect.poll(async () => (await media()).time).toBeGreaterThan(0.05);
+  await player
+    .getByRole("button", { name: "Pause recorded scene", exact: true })
+    .click();
+  const paused = await media();
+  expect(paused.paused).toBe(true);
+  expect(paused.duration).toBeCloseTo(4.9, 3);
+  await page.waitForTimeout(120);
+  expect((await media()).time).toBe(paused.time);
+  await player
+    .getByRole("button", { name: "Jump to recorded line 3: Mara Venn" })
+    .click();
+  await expect.poll(async () => (await media()).time).toBeCloseTo(2.6, 2);
+  await player
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Select line 3: Mara Venn" }),
+  ).toHaveClass(/active/);
+  await player
+    .getByRole("button", { name: "Pause recorded scene", exact: true })
+    .click();
+  const slider = player.getByLabel("Seek recorded scene");
+  await slider.focus();
+  await slider.press("End");
+  await expect.poll(async () => (await media()).time).toBeCloseTo(4.9, 2);
+  await player
+    .getByRole("button", { name: "Stop scene playback", exact: true })
+    .click();
+  await expect.poll(async () => (await media()).time).toBe(0);
+  expect(requests).toHaveLength(4);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("scene mix, individual recordings and device preview never compete", async ({
+  page,
+}) => {
+  await simulatedProvider(page);
+  await ready(page);
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(page.getByTestId("render-status")).toContainText("Scene ready");
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Play A", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Stop recording", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page
+      .getByTestId("scene-audio")
+      .evaluate((audio: HTMLAudioElement) => audio.paused),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Stop recording", exact: true }),
+  ).toHaveCount(0);
+  await page.evaluate(() => {
+    window.speechSynthesis.speak = (utterance) =>
+      utterance.onstart?.(new Event("start") as SpeechSynthesisEvent);
+    window.speechSynthesis.cancel = () => {};
+  });
+  await page
+    .getByRole("button", { name: "Preview selected line", exact: true })
+    .click();
+  expect(
+    await page
+      .getByTestId("scene-audio")
+      .evaluate((audio: HTMLAudioElement) => audio.paused),
+  ).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Select line 1: Mara Venn" }),
+  ).toHaveClass(/active/);
+});
+
+test("rerendering or opening the Director stops scene playback without a late restart", async ({
+  page,
+}) => {
+  const { requests } = await simulatedProvider(page);
+  await ready(page);
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(page.getByTestId("render-status")).toContainText("Scene ready");
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  const before = await page.getByTestId("scene-audio").getAttribute("src");
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(page.getByTestId("scene-audio")).not.toHaveAttribute(
+    "src",
+    before!,
+  );
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeEnabled();
+  expect(
+    await page
+      .getByTestId("scene-audio")
+      .evaluate((audio: HTMLAudioElement) => audio.paused),
+  ).toBe(true);
+  expect(requests).toHaveLength(4);
+  await page.route("**/api/voice-agent/token", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "Simulated Director offline" },
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await page.getByLabel("Direction note").fill("Shorten this line.");
+  await page
+    .getByRole("button", { name: "Send direction", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Director booth").getByRole("alert"),
+  ).toContainText("Simulated Director offline");
+  expect(
+    await page
+      .getByTestId("scene-audio")
+      .evaluate((audio: HTMLAudioElement) => audio.paused),
+  ).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeVisible();
+});
+
+test("editing text or voice stops and invalidates an old mix; undo allows review again", async ({
+  page,
+}) => {
+  await simulatedProvider(page);
+  await ready(page);
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(page.getByTestId("render-status")).toContainText("Scene ready");
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await page.getByLabel("Dialogue", { exact: true }).fill("A new tomorrow.");
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeDisabled();
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("scene-audio")
+        .evaluate((audio: HTMLAudioElement) => audio.paused),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: "Undo scene edit" }).click();
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await page
+    .getByLabel("AssemblyAI voice for Mara Venn")
+    .selectOption("george");
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeDisabled();
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("scene-audio")
+        .evaluate((audio: HTMLAudioElement) => audio.paused),
+    )
+    .toBe(true);
+});
+
+test("splitting long dialogue preserves exact text, cast, direction and undo history", async ({
+  page,
+}) => {
+  await simulatedProvider(page);
+  await ready(page);
+  const text = "Mara—meet Zoë at 9:42. Café déjà vu? 👩🏽‍🚀 ".repeat(18);
+  await page.getByLabel("Dialogue", { exact: true }).fill(text);
+  const direction = await page
+    .getByLabel("Performance direction", { exact: true })
+    .inputValue();
+  await page
+    .getByRole("button", { name: "Split into renderable lines", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Split into renderable lines",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("scenevox.scene.v2")!).lines.length,
+      ),
+    )
+    .toBe(5);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("scenevox.scene.v2")!),
+  );
+  expect(
+    saved.lines
+      .slice(0, 2)
+      .map((line: { text: string }) => line.text)
+      .join(""),
+  ).toBe(text);
+  expect(
+    saved.lines
+      .slice(0, 2)
+      .every(
+        (line: { text: string; characterId: string; direction: string }) =>
+          Array.from(line.text).length <= 500 &&
+          line.characterId === "mara" &&
+          line.direction === direction,
+      ),
+  ).toBe(true);
+  expect(saved.takes.some((take: { text: string }) => take.text === text)).toBe(
+    true,
+  );
+  await page.getByRole("button", { name: "Undo scene edit" }).click();
+  await expect(page.getByLabel("Dialogue", { exact: true })).toHaveValue(text);
+  await page.getByRole("button", { name: "Redo scene edit" }).click();
+  await expect(
+    page.getByRole("button", { name: "Generate take", exact: true }),
+  ).toBeEnabled();
+  await page.getByLabel("Dialogue", { exact: true }).fill("x".repeat(501));
+  await page
+    .getByRole("button", { name: "Split into renderable lines", exact: true })
+    .click();
+  await expect(
+    page.getByText(/cannot be split without cutting a word/),
+  ).toBeVisible();
+  await expect(page.getByLabel("Dialogue", { exact: true })).toHaveValue(
+    "x".repeat(501),
+  );
+});
+
+test("a recorded default voice remains selected after the catalog order changes", async ({
+  page,
+}) => {
+  const { requests } = await simulatedProvider(page);
+  await ready(page);
+  await generate(page);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("scenevox.scene.v2")!)
+            .assemblyVoiceAssignments.mara,
+      ),
+    )
+    .toBe("alba");
+  await page.route("**/api/voice-agent/voices", (route) =>
+    route.fulfill({
+      json: {
+        voices: [
+          { id: "george", name: "George" },
+          { id: "alba", name: "Alba" },
+        ],
+      },
+    }),
+  );
+  await page.reload();
+  await expect(page.getByLabel("AssemblyAI voice for Mara Venn")).toHaveValue(
+    "alba",
+  );
+  await generate(page);
+  expect(requests).toHaveLength(1);
+});
+
 test("simulated exact-read preserves names, punctuation, numbers and Unicode; reload, A/B, stale and WAV", async ({
   page,
 }) => {

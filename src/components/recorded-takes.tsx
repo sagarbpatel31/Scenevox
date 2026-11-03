@@ -19,6 +19,8 @@ import {
   waveform,
 } from "@/lib/audio/wav";
 import { renderTake } from "@/lib/audio/render-take";
+import { sceneTimeline, type SceneSegment } from "@/lib/audio/scene-timeline";
+import { SceneMixPlayer } from "./scene-mix-player";
 
 type Props = {
   scene: SceneDocument;
@@ -57,6 +59,11 @@ export function RecordedTakes({
   const [storageWarning, setStorageWarning] = useState("");
   const [sceneWav, setSceneWav] = useState<Blob | null>(null);
   const [sceneSignature, setSceneSignature] = useState("");
+  const [segments, setSegments] = useState<SceneSegment[]>([]);
+  const stopMix = useRef(() => {});
+  const registerMixStop = useCallback((stop: () => void) => {
+    stopMix.current = stop;
+  }, []);
   const [playingId, setPlayingId] = useState("");
   const [clock, setClock] = useState(0);
   const [peaks, setPeaks] = useState<number[]>([]);
@@ -97,9 +104,13 @@ export function RecordedTakes({
     setClock(0);
     onPlayback(false, null);
   }, [onPlayback]);
+  const stopAll = useCallback(() => {
+    stop();
+    stopMix.current();
+  }, [stop]);
   useEffect(() => {
     mounted.current = true;
-    registerStop(stop);
+    registerStop(stopAll);
     let active = true;
     listAssets()
       .then((items) => {
@@ -119,10 +130,10 @@ export function RecordedTakes({
       active = false;
       mounted.current = false;
       controller.current?.abort();
-      stop();
+      stopAll();
       registerStop(() => {});
     };
-  }, [registerStop, stop]);
+  }, [registerStop, stopAll]);
 
   const remember = async (asset: AudioAsset) => {
     cache.current.set(asset.id, asset);
@@ -180,7 +191,7 @@ export function RecordedTakes({
     const next = new AbortController();
     controller.current = next;
     onStart();
-    stop();
+    stopAll();
     onBusy(true);
     setBusy(true);
     setError("");
@@ -192,6 +203,7 @@ export function RecordedTakes({
         );
       } else {
         const clips: Int16Array[] = [];
+        const timelineClips: Parameters<typeof sceneTimeline>[0] = [];
         // Preflight before spending credits; never truncate long dialogue.
         if (
           scene.lines.some(
@@ -208,11 +220,23 @@ export function RecordedTakes({
           setMessage(`Rendering line ${i + 1} of ${scene.lines.length}…`);
           const asset = await getAudio({ ...scene.lines[i] }, next.signal);
           next.signal.throwIfAborted();
-          clips.push(await readWav(asset.wav));
+          const pcm = await readWav(asset.wav);
+          clips.push(pcm);
+          timelineClips.push({
+            lineId: scene.lines[i].id,
+            text: scene.lines[i].text,
+            speaker:
+              scene.characters.find(
+                (character) => character.id === scene.lines[i].characterId,
+              )?.name ?? "Character",
+            samples: pcm.length,
+            timings: asset.metadata.timings,
+          });
         }
         next.signal.throwIfAborted();
         const pcm = joinPcm(clips);
         setSceneWav(encodeWav(pcm));
+        setSegments(sceneTimeline(timelineClips));
         setSceneSignature(signature);
         setMessage(
           `Scene ready · ${(pcm.length / SAMPLE_RATE).toFixed(2)}s · 300 ms between lines`,
@@ -247,7 +271,7 @@ export function RecordedTakes({
       return;
     }
     onStart();
-    stop();
+    stopAll();
     setError("");
     const epoch = playbackEpoch.current;
     const context = new AudioContext();
@@ -284,7 +308,7 @@ export function RecordedTakes({
     }
   };
   const remove = async (id: string) => {
-    stop();
+    stopAll();
     try {
       if (persisted.current.has(id)) await deleteAsset(id);
       cache.current.delete(id);
@@ -363,6 +387,20 @@ export function RecordedTakes({
           Scene changed. Render again to export the current script; unchanged
           clips will be reused.
         </p>
+      ) : null}
+      {sceneWav ? (
+        <SceneMixPlayer
+          wav={sceneWav}
+          segments={segments}
+          stale={signature !== sceneSignature}
+          busy={busy}
+          onStart={() => {
+            onStart();
+            stop();
+          }}
+          onPlayback={onPlayback}
+          registerStop={registerMixStop}
+        />
       ) : null}
       {tooLong ? (
         <p role="alert">

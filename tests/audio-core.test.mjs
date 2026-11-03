@@ -14,7 +14,9 @@ function load(path) {
   }).outputText;
   const loaded = { exports: {} };
   const localRequire = (id) =>
-    id === "./studio-data" ? load("../src/lib/studio-data.ts") : require(id);
+    id.startsWith(".")
+      ? load(new URL(`${id}.ts`, new URL(path, import.meta.url)).href)
+      : require(id);
   new Function("module", "exports", "require", output)(
     loaded,
     loaded.exports,
@@ -32,6 +34,10 @@ const {
   encodeSharedScene,
   decodeSharedScene,
 } = load("../src/lib/scene-document.ts");
+const { sceneTimeline, segmentAtTime } = load(
+  "../src/lib/audio/scene-timeline.ts",
+);
+const { splitDialogue } = load("../src/lib/split-dialogue.ts");
 test("PCM16 WAV headers and lossless little-endian samples", async () => {
   const pcm = new Int16Array([-32768, -100, 0, 100, 32767]);
   const wav = encodeWav(pcm),
@@ -76,4 +82,58 @@ test("v1 migrates without losing draft; v2 audio stays out of portable documents
   assert.equal(portableScene(migrated).takes[0].audio, undefined);
   assert.deepEqual(decodeSharedScene(encodeSharedScene(migrated)).takes, []);
   assert.equal(validateScene(migrated).takes[0].audio, undefined);
+});
+
+test("scene timeline uses exact sample counts, with no active line during gaps", () => {
+  const segments = sceneTimeline([
+    {
+      lineId: "a",
+      speaker: "Mara",
+      text: "Before.",
+      samples: 24001,
+      timings: [],
+    },
+    {
+      lineId: "b",
+      speaker: "Orion",
+      text: "After.",
+      samples: 48001,
+      timings: [],
+    },
+  ]);
+  assert.equal(segments[0].end, 24001 / 24000);
+  assert.equal(segments[1].start, 31201 / 24000);
+  assert.equal(segments[1].end, 79202 / 24000);
+  assert.equal(segmentAtTime(segments, 0).lineId, "a");
+  assert.equal(segmentAtTime(segments, segments[0].end), undefined);
+  assert.equal(segmentAtTime(segments, segments[1].start).lineId, "b");
+  assert.equal(segmentAtTime(segments, segments[1].end), undefined);
+  assert.throws(() =>
+    sceneTimeline([
+      { lineId: "bad", speaker: "", text: "", samples: 0, timings: [] },
+    ]),
+  );
+});
+
+test("dialogue splitting preserves all Unicode, whitespace and punctuation", () => {
+  for (const text of [
+    "Mara—meet Zoë at 9:42. Café déjà vu? ".repeat(25),
+    "Hello!\n\tDon’t leave, Élodie. 👩🏽‍🚀  ".repeat(25),
+    `${"a".repeat(500)} b`,
+    "Hello world.",
+  ]) {
+    const parts = splitDialogue(text);
+    assert.equal(parts.join(""), text);
+    assert.ok(
+      parts.every((part) => Array.from(part).length <= 500 && part.trim()),
+    );
+    assert.ok(
+      parts.every(
+        (part, i) =>
+          i === 0 || /\s/u.test(part[0]) || /\s/u.test(parts[i - 1].at(-1)),
+      ),
+    );
+  }
+  assert.throws(() => splitDialogue("x".repeat(501)), /without cutting a word/);
+  assert.throws(() => splitDialogue("word", 0));
 });
