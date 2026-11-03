@@ -60,3 +60,13 @@
 - Verified 18 production browser regressions, 10 audio/schema/route tests, and all three opt-in real API tests. Production lint, TypeScript and build pass; browser bundles do not contain the configured key.
 - Fixed a rapid-refresh autosave race discovered in production testing. Updated the judge tour, runbook, CI workflow, measurements and manual acceptance checklist.
 - Physical microphone and human listening remain explicitly pending. No public deployment or hosted audio was added.
+
+## 2026-11-02 — assembled-scene review
+
+- Resumed the clean recorded-takes milestone and restarted the local production studio.
+- Added an in-app scene player with play/pause/resume, seeking, line jumps, synchronized captions and script highlighting from actual media time. The player and download use the same WAV.
+- Added sample-accurate line/gap boundaries and exclusive playback handoffs between the scene mix, individual takes, device previews, the Director and rendering. Stale mixes stop and require rerendering.
+- Added lossless long-dialogue splitting, retaining speaker, direction, original take and single-edit undo. Unbreakable oversized words produce a recoverable error instead of truncation.
+- Saved recorded default voice selections so catalog reordering cannot silently change them.
+- Local checks passed: lint, TypeScript, production build, 12 unit/route/audio tests and 25 browser tests. Inspected the review UI screenshot and verified mobile overflow behavior. A deterministic late-promise test verifies that a quick intentional pause cannot show a false playback error.
+- This continuation used simulated provider audio; no paid API tests or new latency claims. Historical real API evidence stays separately dated. Physical microphone/listening acceptance remains pending.

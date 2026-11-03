@@ -1,6 +1,10 @@
 # SceneVox verification
 
-## Tested revision and environment
+Latest checkpoint: [scene-review verification — 2026-11-02](./scene-review-verification.md), covering 25 browser regressions, 12 unit/route tests, the in-app scene player and lossless dialogue splitting. The live API measurements below are historical results from 2026-10-17, not a fresh provider-availability or latency check.
+
+## Recorded-take milestone — 2026-10-17
+
+### Tested revision and environment
 
 - Tested commit: [`51730ead6469c2d9006c3a52c524d525f43a9fd5`](https://github.com/sagarbpatel31/Scenevox/commit/51730ead6469c2d9006c3a52c524d525f43a9fd5). Later documentation-only commits do not change the tested app.
 - Local date: 2026-10-17 PDT (2026-10-18 UTC).
