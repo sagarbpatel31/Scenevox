@@ -182,7 +182,70 @@ test("assembled scene supports play, pause, resume, seeking and line jumps", asy
   await expect.poll(async () => (await media()).time).toBe(0);
   expect(requests).toHaveLength(4);
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("intentional quick pause does not surface a late rejected play request", async ({
+  page,
+}) => {
+  await simulatedProvider(page);
+  await ready(page);
+  await page.getByRole("button", { name: "Render scene", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Play recorded scene", exact: true }),
+  ).toBeEnabled();
+  await page.getByTestId("scene-audio").evaluate((audio: HTMLAudioElement) => {
+    const original = audio.play.bind(audio);
+    audio.play = async () => {
+      await original();
+      await new Promise<void>((_resolve, reject) => {
+        (
+          audio as HTMLAudioElement & { rejectPendingPlay: () => void }
+        ).rejectPendingPlay = () =>
+          reject(new DOMException("Play interrupted by pause", "AbortError"));
+      });
+    };
+  });
+  await page
+    .getByRole("button", { name: "Play recorded scene", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("scene-audio")
+        .evaluate(
+          (audio) =>
+            typeof (
+              audio as HTMLAudioElement & { rejectPendingPlay?: () => void }
+            ).rejectPendingPlay,
+        ),
+    )
+    .toBe("function");
+  await page
+    .getByRole("button", { name: "Pause recorded scene", exact: true })
+    .click();
+  await page.getByTestId("scene-audio").evaluate(async (audio) => {
+    (
+      audio as HTMLAudioElement & { rejectPendingPlay: () => void }
+    ).rejectPendingPlay();
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+  });
+  await expect(
+    page
+      .getByRole("region", { name: "Assembled scene player" })
+      .getByRole("alert"),
+  ).toHaveCount(0);
+  expect(
+    await page
+      .getByTestId("scene-audio")
+      .evaluate((audio: HTMLAudioElement) => audio.paused),
+  ).toBe(true);
 });
 
 test("scene mix, individual recordings and device preview never compete", async ({

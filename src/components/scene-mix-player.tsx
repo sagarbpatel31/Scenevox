@@ -182,7 +182,12 @@ export function SceneMixPlayer({
       <div className="scene-transport">
         <button
           disabled={disabled}
-          onClick={() => (playing ? audio.current?.pause() : void play())}
+          onClick={() => {
+            if (playing) {
+              invalidatePlay();
+              audio.current?.pause();
+            } else void play();
+          }}
         >
           {playing ? "Pause recorded scene" : "Play recorded scene"}
         </button>
